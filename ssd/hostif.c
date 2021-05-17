@@ -5,11 +5,13 @@
 #include "ringbuf.h"
 
 #include <assert.h>
+#include <string.h>
 
 /* Message types. */
 #define MT_READ 1
 #define MT_WRITE 2
 #define MT_READ_COMP 3
+#define MT_IRQ 4
 
 #define MESSAGE_RINGBUF_DEFAULT_CAPACITY (PG_SIZE * 4 - 1)
 
@@ -83,9 +85,25 @@ int hostif_complete_host_read(uint32_t id, const char* buf, size_t len)
     virtio_vsock_send(VSOCK_HOST_CID, VSOCK_HOST_PORT, msg, 2 + msg_len);
 }
 
+int hostif_send_irq(uint16_t vector)
+{
+    char msg[1024];
+    size_t msg_len = 2 + 2;
+
+    assert(msg_len + 2 <= sizeof(msg));
+
+    *(uint16_t*)&msg[0] = __builtin_bswap16(msg_len);
+    *(uint16_t*)&msg[2] = __builtin_bswap16((uint16_t)MT_IRQ);
+    *(uint16_t*)&msg[4] = __builtin_bswap16(vector);
+
+    virtio_vsock_send(VSOCK_HOST_CID, VSOCK_HOST_PORT, msg, 2 + msg_len);
+}
+
 void hostif_init(void)
 {
     pcie_message_ringbuf = ringbuf_new(MESSAGE_RINGBUF_DEFAULT_CAPACITY);
+
+    hostif_nvme_init();
 
     virtio_vsock_set_recv_callback(hostif_process_pcie_message);
 }

@@ -3,4 +3,6 @@
 
 #define CONFIG_SMP_MAX_CPUS 8
 
+#define CONFIG_NVME_IO_QUEUE_MAX 64
+
 #endif
