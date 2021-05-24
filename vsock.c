@@ -2,15 +2,16 @@
 #include "errno.h"
 #include "global.h"
 #include "proto.h"
+#include "spinlock.h"
 #include "string.h"
 #include "virtio.h"
-
 #include "virtio_vsock.h"
 
 #define DEFAULT_RX_BUF_SIZE PG_SIZE
 
 static struct virtio_dev* vsock_dev;
 static struct virtio_vsock_config vsock_config;
+static spinlock_t send_lock;
 
 enum {
     VSOCK_VQ_RX = 0, /* for host to guest data */
@@ -108,6 +109,9 @@ static void virtio_vsock_fill_rx(void)
 int init_vsock(void)
 {
     int retval;
+
+    spin_lock_init(&send_lock);
+
     vq_callback_t callbacks[] = {
         virtio_vsock_rx_done,
         virtio_vsock_tx_done,
@@ -253,10 +257,13 @@ int virtio_vsock_send(uint32_t dst_cid, uint32_t dst_port, const char* buf,
     struct virtio_vsock_pkt* pkt;
     int retval;
 
+    spin_lock(&send_lock);
+
+    retval = ENOMEM;
     pkt =
         virtio_vsock_alloc_pkt(VIRTIO_VSOCK_TYPE_STREAM, VIRTIO_VSOCK_OP_RW,
                                buf, len, src_cid, src_port, dst_cid, dst_port);
-    if (!pkt) return ENOMEM;
+    if (!pkt) goto unlock;
 
     virtio_vsock_inc_tx_pkt(pkt);
 
@@ -271,10 +278,13 @@ int virtio_vsock_send(uint32_t dst_cid, uint32_t dst_port, const char* buf,
     retval = virtqueue_add_buffers(vq, bufs, 2, pkt);
     if (retval) {
         virtio_vsock_free_pkt(pkt);
-        return -retval;
+        retval = -retval;
+        goto unlock;
     }
 
     virtqueue_kick(vq);
 
-    return 0;
+unlock:
+    spin_unlock(&send_lock);
+    return retval;
 }
