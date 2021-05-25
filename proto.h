@@ -80,6 +80,8 @@ void put_irq_handler(int irq, int (*handler)(int, void*), void* data);
 /* smp.c */
 void init_smp(unsigned int bsp_hart, void* dtb);
 void smp_commence(void);
+void software_interrupt(void);
+void smp_notify(unsigned int cpu);
 
 /* vsock.c */
 int init_vsock(void);

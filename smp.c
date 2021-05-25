@@ -2,7 +2,9 @@
 #include "const.h"
 #include "fdt.h"
 #include "global.h"
+#include "irq.h"
 #include "proto.h"
+#include "sbi.h"
 #include "string.h"
 
 unsigned int hart_counter = 0;
@@ -83,6 +85,47 @@ static void setup_cpulocals(void)
     }
 }
 
+void send_ipi(unsigned int* cpu_mask)
+{
+#define MASK_LEN                                               \
+    (CONFIG_SMP_MAX_CPUS + (sizeof(unsigned long) << 3) - 1) / \
+        (sizeof(unsigned long) << 3)
+
+    unsigned long hart_mask[MASK_LEN];
+    int i, j;
+
+    memset(hart_mask, 0, sizeof(hart_mask));
+    for (i = 0; i < MASK_LEN; i++) {
+        for (j = 0; j < sizeof(unsigned long) << 3; j++) {
+            int cpuid = i * (sizeof(unsigned long) << 3) + j;
+
+            if (cpuid >= CONFIG_SMP_MAX_CPUS) break;
+
+            if (cpu_mask[i] & (1 << j)) {
+                int hart_id = cpu_to_hart_id[cpuid];
+                hart_mask[hart_id / (sizeof(unsigned long) << 3)] |=
+                    1 << (hart_id % (sizeof(unsigned long) << 3));
+            }
+        }
+    }
+
+    sbi_send_ipi(hart_mask);
+}
+
+void send_ipi_single(unsigned int cpu)
+{
+    unsigned long hart_mask[MASK_LEN];
+    int hart_id = cpu_to_hart_id[cpu];
+
+    memset(hart_mask, 0, sizeof(hart_mask));
+    hart_mask[hart_id / (sizeof(unsigned long) << 3)] =
+        1 << (hart_id % (sizeof(unsigned long) << 3));
+
+    sbi_send_ipi(hart_mask);
+}
+
+void smp_notify(unsigned int cpu) { send_ipi_single(cpu); }
+
 void init_smp(unsigned int bsp_hart, void* dtb)
 {
     bsp_hart_id = bsp_hart;
@@ -102,17 +145,27 @@ void init_smp(unsigned int bsp_hart, void* dtb)
 void smp_boot_ap(void)
 {
     __cpu_ready = smp_processor_id();
-    printk("smp: CPU %d is up\r\n", smp_processor_id());
+    printk("smp: CPU %d is up\r\n", smp_processor_id(),
+           cpu_to_hart_id[smp_processor_id()]);
+
+    init_trap();
+    local_irq_enable();
 
     while (!smp_commenced)
         ;
 
     while (1)
-        ;
+        asm volatile("wfi" ::: "memory");
 }
 
 void smp_commence(void)
 {
     __asm__ __volatile__("fence rw, rw" : : : "memory");
     smp_commenced = 1;
+}
+
+void software_interrupt(void)
+{
+    csr_clear(sip, SIE_SSIE);
+    printk("Software interrupt %d\r\n", smp_processor_id());
 }

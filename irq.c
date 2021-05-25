@@ -6,6 +6,7 @@
 
 /* interrupt causes */
 #define INTERRUPT_CAUSE_FLAG (1UL << (__riscv_xlen - 1))
+#define INTERRUPT_CAUSE_SOFTWARE 1
 #define INTERRUPT_CAUSE_TIMER 5
 #define INTERRUPT_CAUSE_EXT 9
 
@@ -165,8 +166,11 @@ static void plic_handle_irq(void)
 
 void handle_irq(reg_t scause)
 {
-    printk("Interrupt\r\n");
+    printk("Interrupt %d\r\n", smp_processor_id());
     switch (scause & ~INTERRUPT_CAUSE_FLAG) {
+    case INTERRUPT_CAUSE_SOFTWARE:
+        software_interrupt();
+        break;
     case INTERRUPT_CAUSE_TIMER:
         timer_interrupt();
         break;

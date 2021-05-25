@@ -44,6 +44,7 @@
 #define IRQ_M_EXT 11
 
 /* interrupt enable flags */
+#define SIE_SSIE 0x00000002UL /* Software Interrupt Enable */
 #define SIE_STIE 0x00000020UL /* Timer Interrupt Enable */
 #define SIE_SEIE 0x00000200UL /* External Interrupt Enable */
 

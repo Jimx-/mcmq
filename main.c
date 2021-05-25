@@ -7,6 +7,8 @@
 #include "virtio.h"
 #include "vm.h"
 
+#include "sbi.h"
+
 #include "ssd/hostif.h"
 
 void kernel_main(unsigned int hart_id, void* dtb_phys)
@@ -45,6 +47,8 @@ void kernel_main(unsigned int hart_id, void* dtb_phys)
     restart_local_timer();
 
     smp_commence();
+
+    smp_notify(1);
 
     while (1)
         ;
