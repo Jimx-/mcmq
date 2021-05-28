@@ -37,6 +37,8 @@ struct nvme_queue {
 
 static struct nvme_queue nvme_queues[1 + CONFIG_NVME_IO_QUEUE_MAX];
 
+static inline int nvmeq_worker(int qid) { return qid; }
+
 void hostif_nvme_init(void)
 {
     int i;
@@ -159,6 +161,16 @@ static void process_admin_command(struct nvme_command* cmd)
     post_cqe(&nvme_queues[0], status, cmd->common.command_id, &result);
 }
 
+static void process_io_command(struct nvme_queue* nvmeq,
+                               struct nvme_command* cmd)
+{
+    int do_write = cmd->rw.opcode == nvme_cmd_write;
+    uint64_t slba = cmd->rw.slba;
+    uint64_t length = cmd->rw.length;
+
+    enqueue_rw_command(nvmeq_worker(nvmeq->qid), do_write, slba, length);
+}
+
 static void fetch_next_request(struct nvme_queue* nvmeq)
 {
     struct nvme_command cmd;
@@ -169,7 +181,7 @@ static void fetch_next_request(struct nvme_queue* nvmeq)
     if (nvmeq->qid == 0)
         process_admin_command(&cmd);
     else
-        printk("IO queue command\r\n");
+        process_io_command(nvmeq, &cmd);
 }
 
 void nvme_process_read_message(uint64_t addr, uint32_t id)
@@ -238,6 +250,8 @@ static void update_sq_tail_doorbell(unsigned int qid, uint32_t val)
 
     if (qid == 0 && nvmeq->cq_head != nvmeq->cq_tail)
         hostif_send_irq(nvmeq->cq_vector);
+
+    if (qid) notify_worker(nvmeq_worker(qid));
 }
 
 void nvme_process_write_message(uint64_t addr, const char* buf, size_t len)

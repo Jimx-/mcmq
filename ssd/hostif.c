@@ -3,6 +3,7 @@
 #include "const.h"
 #include "proto.h"
 #include "ringbuf.h"
+#include "ssd.h"
 
 #include <assert.h>
 #include <string.h>
@@ -107,3 +108,5 @@ void hostif_init(void)
 
     virtio_vsock_set_recv_callback(hostif_process_pcie_message);
 }
+
+void hostif_init_cpu(void) { init_ssd_worker(); }

@@ -6,6 +6,7 @@
 
 /* hostif.c */
 void hostif_init(void);
+void hostif_init_cpu(void);
 int hostif_complete_host_read(uint32_t id, const char* buf, size_t len);
 int hostif_send_irq(uint16_t vector);
 

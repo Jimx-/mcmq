@@ -96,4 +96,6 @@ int init_ivshmem(void);
 void ivshmem_copy_from(void* dst, shmem_addr_t src, size_t len);
 void ivshmem_copy_to(shmem_addr_t dst, void* src, size_t len);
 
+static inline void wait_for_interrupt(void) { __asm__ __volatile__("wfi"); }
+
 #endif

@@ -33,6 +33,7 @@ void kernel_main(unsigned int hart_id, void* dtb_phys)
     init_vsock();
 
     hostif_init();
+    hostif_init_cpu();
 
     virtio_vsock_connect(VSOCK_HOST_CID, VSOCK_HOST_PORT);
 
@@ -48,12 +49,8 @@ void kernel_main(unsigned int hart_id, void* dtb_phys)
 
     smp_commence();
 
-    smp_notify(1);
-
     while (1)
-        ;
-
-    /* switch_to_user(); */
+        wait_for_interrupt();
 
     /* unreachable */
     return;

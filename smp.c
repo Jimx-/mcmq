@@ -7,6 +7,9 @@
 #include "sbi.h"
 #include "string.h"
 
+#include "ssd/hostif.h"
+#include "ssd/ssd.h"
+
 unsigned int hart_counter = 0;
 
 #define BOOT_CPULOCALS_OFFSET 0
@@ -137,9 +140,9 @@ void init_smp(unsigned int bsp_hart, void* dtb)
 
     k_stacks = &k_stacks_start;
 
-    of_scan_fdt(fdt_scan_hart, NULL, dtb);
-
     setup_cpulocals();
+
+    of_scan_fdt(fdt_scan_hart, NULL, dtb);
 }
 
 void smp_boot_ap(void)
@@ -151,11 +154,13 @@ void smp_boot_ap(void)
     init_trap();
     local_irq_enable();
 
+    hostif_init_cpu();
+
     while (!smp_commenced)
         ;
 
     while (1)
-        asm volatile("wfi" ::: "memory");
+        wait_for_interrupt();
 }
 
 void smp_commence(void)
@@ -167,5 +172,6 @@ void smp_commence(void)
 void software_interrupt(void)
 {
     csr_clear(sip, SIE_SSIE);
-    printk("Software interrupt %d\r\n", smp_processor_id());
+
+    process_worker_queue();
 }
