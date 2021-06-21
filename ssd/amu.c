@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "ssd.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
@@ -76,6 +77,22 @@ static inline lpa_t get_mvpn(struct am_domain* domain, lpa_t lpa)
     return lpa / domain->translation_entries_per_page;
 }
 
+static inline void ppa_to_address(ppa_t ppa, struct flash_address* addr)
+{
+#define XLATE_PPA(ppa, name)                      \
+    do {                                          \
+        addr->name##_id = ppa / pages_per_##name; \
+        ppa = ppa % pages_per_##name;             \
+    } while (0)
+    XLATE_PPA(ppa, channel);
+    XLATE_PPA(ppa, chip);
+    XLATE_PPA(ppa, die);
+    XLATE_PPA(ppa, plane);
+    XLATE_PPA(ppa, block);
+    addr->page_id = ppa;
+#undef XLATE_PPA
+}
+
 static inline ppa_t address_to_ppa(struct flash_address* addr)
 {
     return pages_per_chip *
@@ -134,6 +151,12 @@ static struct mapping_entry* mt_find(struct mapping_table* mt, lpa_t lpa)
     return NULL;
 }
 
+static void mt_touch_lru(struct mapping_table* mt, struct mapping_entry* entry)
+{
+    list_del(&entry->lru);
+    list_add(&entry->lru, &mt->lru_list);
+}
+
 static int mt_reserve_slot(struct mapping_table* mt, lpa_t lpa)
 {
     struct mapping_entry* entry;
@@ -179,6 +202,19 @@ static inline int mapping_entry_exists(struct am_domain* domain, lpa_t lpa)
     return mt_find(&domain->table, lpa) != NULL;
 }
 
+static ppa_t get_ppa(struct am_domain* domain, lpa_t lpa)
+{
+    struct mapping_entry* entry;
+
+    entry = mt_find(&domain->table, lpa);
+    if (!entry) return NO_PPA;
+
+    assert(entry->status == MES_VALID);
+
+    mt_touch_lru(&domain->table, entry);
+    return entry->ppa;
+}
+
 static void assign_plane(struct flash_transaction* txn)
 {
     struct flash_address* addr = &txn->addr;
@@ -202,7 +238,20 @@ static void alloc_page_for_write(struct flash_transaction* txn, int for_gc)
 static int translate_lpa(struct am_domain* domain,
                          struct flash_transaction* txn)
 {
+
     if (txn->type == TXN_READ) {
+        ppa_t ppa = get_ppa(domain, txn->lpa);
+
+        if (ppa == NO_PPA) {
+            assign_plane(txn);
+            alloc_page_for_write(txn, FALSE);
+        } else {
+            txn->ppa = ppa;
+            ppa_to_address(txn->ppa, &txn->addr);
+        }
+        txn->ppa_ready = TRUE;
+
+        return TRUE;
     } else {
         assign_plane(txn);
         alloc_page_for_write(txn, FALSE);

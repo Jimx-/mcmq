@@ -38,6 +38,7 @@ struct user_request;
 struct flash_transaction {
     struct list_head list;
     struct list_head queue;
+    struct list_head waiting_list;
     struct user_request* req;
     enum txn_type type;
     enum txn_source source;
@@ -83,6 +84,8 @@ enum bus_status {
 enum chip_status {
     CS_IDLE,
     CS_CMD_DATA_IN,
+    CS_WAIT_FOR_DATA_OUT,
+    CS_DATA_OUT,
     CS_READING,
     CS_WRITING,
     CS_ERASING,

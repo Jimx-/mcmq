@@ -6,12 +6,23 @@
 #include <assert.h>
 #include <string.h>
 
+struct nvm_ctlr_stats {
+    size_t read_cmds;
+    size_t multiplane_read_cmds;
+    size_t program_cmds;
+    size_t multiplane_program_cmds;
+};
+
+static struct nvm_ctlr_stats stats;
+
 struct channel_data {
     unsigned int channel_id;
     enum bus_status status;
     unsigned int channel_width;
     time_ns_t t_RC;
     time_ns_t t_DSC;
+
+    struct list_head waiting_read_xfer;
 };
 
 struct die_data {
@@ -23,6 +34,9 @@ struct die_data {
     struct flash_command* active_cmd;
     struct flash_command* current_cmd;
     time_ns_t cmd_finish_time;
+
+    struct flash_transaction* active_xfer;
+    time_ns_t xfer_complete_time;
 };
 
 struct chip_data {
@@ -40,6 +54,7 @@ struct chip_data {
     struct list_head cmd_xfer_queue;
     struct die_data* current_xfer;
     time_ns_t xfer_complete_time;
+    unsigned int nr_waiting_read_xfers;
 };
 
 static unsigned int channel_count, chips_per_channel, dies_per_chip,
@@ -47,6 +62,8 @@ static unsigned int channel_count, chips_per_channel, dies_per_chip,
 
 static struct chip_data** chip_data;
 static struct channel_data* channel_data;
+
+static void complete_chip_transfer(struct chip_data* chip);
 
 static inline time_ns_t
 nvddr2_data_in_transfer_time(struct channel_data* channel, size_t size)
@@ -109,12 +126,17 @@ static void set_channel_status(struct channel_data* channel,
     channel->status = status;
 }
 
+static void set_chip_status(struct chip_data* chip, enum chip_status status)
+{
+    chip->status = status;
+}
+
 static void init_chip(struct chip_data* chip)
 {
     int i;
 
     INIT_LIST_HEAD(&chip->cmd_xfer_queue);
-    chip->status = CS_IDLE;
+    set_chip_status(chip, CS_IDLE);
 
     for (i = 0; i < dies_per_chip; i++)
         init_die(&chip->dies[i]);
@@ -196,16 +218,24 @@ static void rearm_timer(void)
             struct chip_data* chip = &chip_data[i][j];
 
             if (chip->current_xfer) {
-                if (min_time > chip->xfer_complete_time)
+                if (min_time > chip->xfer_complete_time) {
                     min_time = chip->xfer_complete_time;
+                }
             }
 
             for (k = 0; k < dies_per_chip; k++) {
                 struct die_data* die = &chip->dies[k];
 
                 if (die->current_cmd) {
-                    if (min_time > die->cmd_finish_time)
+                    if (min_time > die->cmd_finish_time) {
                         min_time = die->cmd_finish_time;
+                    }
+                }
+
+                if (die->active_xfer) {
+                    if (min_time > die->xfer_complete_time) {
+                        min_time = die->xfer_complete_time;
+                    }
                 }
             }
         }
@@ -220,7 +250,7 @@ static int start_cmd_data_transfer(struct chip_data* chip)
     time_ns_t now;
 
     if (chip->status != CS_IDLE) return FALSE;
-    if (chip->current_xfer) return FALSE;
+    assert(!chip->current_xfer);
 
     if (list_empty(&chip->cmd_xfer_queue)) return FALSE;
 
@@ -228,9 +258,41 @@ static int start_cmd_data_transfer(struct chip_data* chip)
     list_del(&die->list);
 
     now = current_time_ns();
-    chip->status = CS_CMD_DATA_IN;
+    set_chip_status(chip, CS_CMD_DATA_IN);
     chip->current_xfer = die;
     chip->xfer_complete_time = now + die->data_transfer_time;
+
+    if (!die->data_transfer_time) complete_chip_transfer(chip);
+
+    return TRUE;
+}
+
+static int start_data_out_transfer(struct channel_data* channel)
+{
+    struct flash_transaction* txn = NULL;
+    struct chip_data* chip;
+    struct die_data* die;
+    time_ns_t now;
+
+    if (channel->status != BUS_IDLE) return FALSE;
+
+    if (!list_empty(&channel->waiting_read_xfer))
+        txn = list_entry(channel->waiting_read_xfer.next,
+                         struct flash_transaction, waiting_list);
+
+    if (!txn) return FALSE;
+    list_del(&txn->waiting_list);
+
+    chip = &chip_data[channel->channel_id][txn->addr.chip_id];
+    die = &chip->dies[txn->addr.die_id];
+    assert(!die->active_xfer);
+
+    now = current_time_ns();
+    set_chip_status(chip, CS_DATA_OUT);
+    die->active_xfer = txn;
+    die->xfer_complete_time =
+        now + nvddr2_data_out_transfer_time(channel, txn->length);
+    set_channel_status(channel, BUS_BUSY);
 
     return TRUE;
 }
@@ -252,6 +314,16 @@ static int start_die_command(struct chip_data* chip, struct flash_command* cmd)
     chip->active_dies++;
 
     return TRUE;
+}
+
+static void dispatch_read(struct channel_data* channel, struct chip_data* chip,
+                          struct die_data* die)
+{
+    /* Ignore command read latency. */
+    die->data_transfer_time = 0;
+    list_add_tail(&die->list, &chip->cmd_xfer_queue);
+
+    start_cmd_data_transfer(chip);
 }
 
 static void dispatch_write(struct channel_data* channel, struct chip_data* chip,
@@ -283,6 +355,7 @@ void nvm_ctlr_dispatch(struct list_head* txn_list)
     unsigned int txn_count = 0;
 
     if (list_empty(txn_list)) return;
+    assert(!die->active_cmd);
 
     list_for_each_entry(txn, txn_list, queue) { txn_count++; }
 
@@ -294,18 +367,33 @@ void nvm_ctlr_dispatch(struct list_head* txn_list)
     die->active_cmd->nr_addrs = txn_count;
     die->active_cmd->addr = head->addr;
 
+    set_channel_status(channel, BUS_BUSY);
+
     switch (head->type) {
+    case TXN_READ:
+        if (txn_count == 1) {
+            stats.read_cmds++;
+            die->active_cmd->cmd_code = CMD_READ_PAGE;
+        } else {
+            stats.multiplane_read_cmds++;
+            die->active_cmd->cmd_code = CMD_READ_PAGE_MULTIPLANE;
+        }
+
+        dispatch_read(channel, chip, die);
+        break;
     case TXN_WRITE:
-        if (txn_count == 1)
+        if (txn_count == 1) {
+            stats.program_cmds++;
             die->active_cmd->cmd_code = CMD_PROGRAM_PAGE;
-        else
+        } else {
+            stats.multiplane_program_cmds++;
             die->active_cmd->cmd_code = CMD_PROGRAM_PAGE_MULTIPLANE;
+        }
 
         dispatch_write(channel, chip, die);
         break;
     }
 
-    set_channel_status(channel, BUS_BUSY);
     rearm_timer();
 }
 
@@ -327,7 +415,15 @@ static void complete_chip_transfer(struct chip_data* chip)
         return;
     }
 
-    chip->status = CS_WRITING;
+    switch (head->type) {
+    case TXN_READ:
+        set_chip_status(chip, CS_READING);
+        break;
+    case TXN_WRITE:
+        set_chip_status(chip, CS_WRITING);
+        break;
+    }
+
     set_channel_status(channel, BUS_IDLE);
     tsu_notify_channel_idle(channel->channel_id);
 }
@@ -341,6 +437,18 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
     die->cmd_finish_time = UINT64_MAX;
 
     switch (cmd->cmd_code) {
+    case CMD_READ_PAGE:
+    case CMD_READ_PAGE_MULTIPLANE:
+        if (!--chip->active_dies) set_chip_status(chip, CS_WAIT_FOR_DATA_OUT);
+
+        list_for_each_entry(txn, &die->active_txns, queue)
+        {
+            chip->nr_waiting_read_xfers++;
+            list_add(&txn->waiting_list, &chip->channel->waiting_read_xfer);
+        }
+
+        start_data_out_transfer(chip->channel);
+        break;
     case CMD_PROGRAM_PAGE:
     case CMD_PROGRAM_PAGE_MULTIPLANE:
         list_for_each_entry(txn, &die->active_txns, queue)
@@ -350,7 +458,7 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
         INIT_LIST_HEAD(&die->active_txns);
         die->active_cmd = NULL;
 
-        if (!--chip->active_dies) chip->status = CS_IDLE;
+        if (!--chip->active_dies) set_chip_status(chip, CS_IDLE);
 
         break;
     }
@@ -359,6 +467,32 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
         tsu_notify_channel_idle(chip->channel->channel_id);
     if (chip->status == CS_IDLE)
         tsu_notify_chip_idle(chip->channel->channel_id, chip->chip_id);
+}
+
+static void complete_data_out_transfer(struct chip_data* chip,
+                                       struct die_data* die)
+{
+    struct flash_transaction* txn = die->active_xfer;
+
+    die->active_xfer = NULL;
+    die->xfer_complete_time = UINT64_MAX;
+
+    list_del(&txn->queue);
+    notify_transaction_complete(txn);
+
+    if (list_empty(&die->active_txns)) {
+        die->active_cmd = NULL;
+    }
+
+    if (!chip->active_dies) {
+        if (!--chip->nr_waiting_read_xfers) {
+            set_chip_status(chip, CS_IDLE);
+        } else {
+            set_chip_status(chip, CS_WAIT_FOR_DATA_OUT);
+        }
+    }
+
+    set_channel_status(chip->channel, BUS_IDLE);
 }
 
 static void check_completion(void)
@@ -380,8 +514,19 @@ static void check_completion(void)
                 if (die->current_cmd && now >= die->cmd_finish_time) {
                     complete_die_command(chip, die);
                 }
+
+                if (die->active_xfer && now >= die->xfer_complete_time) {
+                    complete_data_out_transfer(chip, die);
+                }
             }
         }
+    }
+
+    for (i = 0; i < channel_count; i++) {
+        struct channel_data* channel = &channel_data[i];
+
+        start_data_out_transfer(channel);
+        if (channel->status == BUS_IDLE) tsu_notify_channel_idle(i);
     }
 }
 
@@ -390,6 +535,7 @@ void nvm_ctlr_init_channel(unsigned int channel_id, unsigned int channel_width,
 {
     struct channel_data* channel = &channel_data[channel_id];
 
+    INIT_LIST_HEAD(&channel->waiting_read_xfer);
     channel->channel_width = channel_width;
     channel->t_RC = t_RC;
     channel->t_DSC = t_DSC;

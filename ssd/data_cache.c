@@ -8,8 +8,15 @@ static inline int is_user_request_complete(struct user_request* req)
     return list_empty(&req->txn_list);
 }
 
+static void complete_user_request(struct user_request* req)
+{
+    nvme_complete_request(req);
+}
+
 void dc_handle_user_request(struct user_request* req)
 {
+    if (list_empty(&req->txn_list)) complete_user_request(req);
+
     switch (cache_mode) {
     case CM_NO_CACHE:
         amu_dispatch(req);
@@ -24,26 +31,12 @@ void dc_handle_user_request(struct user_request* req)
     }
 }
 
-static void complete_user_request(struct user_request* req)
-{
-    nvme_complete_request(req);
-}
-
 void dc_transaction_complete(struct flash_transaction* txn)
 {
-    switch (txn->type) {
-    case TXN_READ:
-        break;
-    case TXN_WRITE:
-        switch (cache_mode) {
-        case CM_NO_CACHE:
-            list_del(&txn->list);
-            if (is_user_request_complete(txn->req))
-                complete_user_request(txn->req);
-            break;
-        case CM_WRITE_CACHE:
-            break;
-        }
-        break;
+    if (txn->type == TXN_WRITE && cache_mode == CM_WRITE_CACHE) {
+
+    } else {
+        list_del(&txn->list);
+        if (is_user_request_complete(txn->req)) complete_user_request(txn->req);
     }
 }
