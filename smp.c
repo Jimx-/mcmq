@@ -76,9 +76,9 @@ static void setup_cpulocals(void)
     extern char _cpulocals_start[], _cpulocals_end[];
 
     size = roundup(_cpulocals_end - _cpulocals_start, PG_SIZE);
-    ptr = vmalloc_pages((size * cpu_nr) >> PG_SHIFT, NULL);
+    ptr = vmalloc_pages((size * CONFIG_SMP_MAX_CPUS) >> PG_SHIFT, NULL);
 
-    for (cpu = 0; cpu < cpu_nr; cpu++) {
+    for (cpu = 0; cpu < CONFIG_SMP_MAX_CPUS; cpu++) {
         cpulocals_offset(cpu) = ptr - (char*)_cpulocals_start;
         memcpy(ptr, (void*)_cpulocals_start, _cpulocals_end - _cpulocals_start);
 
@@ -148,8 +148,7 @@ void init_smp(unsigned int bsp_hart, void* dtb)
 void smp_boot_ap(void)
 {
     __cpu_ready = smp_processor_id();
-    printk("smp: CPU %d is up\r\n", smp_processor_id(),
-           cpu_to_hart_id[smp_processor_id()]);
+    printk("smp: CPU %d is up\r\n", smp_processor_id());
 
     init_trap();
     local_irq_enable();

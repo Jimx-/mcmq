@@ -5,4 +5,6 @@
 
 typedef uint64_t shmem_addr_t;
 
+typedef uint64_t time_ns_t;
+
 #endif

@@ -100,11 +100,11 @@ int hostif_send_irq(uint16_t vector)
     virtio_vsock_send(VSOCK_HOST_CID, VSOCK_HOST_PORT, msg, 2 + msg_len);
 }
 
-void hostif_init(void)
+void hostif_init(unsigned int sectors_per_page)
 {
     pcie_message_ringbuf = ringbuf_new(MESSAGE_RINGBUF_DEFAULT_CAPACITY);
 
-    hostif_nvme_init();
+    hostif_nvme_init(sectors_per_page);
 
     virtio_vsock_set_recv_callback(hostif_process_pcie_message);
 }

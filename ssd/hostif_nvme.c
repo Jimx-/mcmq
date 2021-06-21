@@ -1,14 +1,18 @@
 #include "config.h"
 #include "hostif.h"
 #include "nvme.h"
+#include "proto.h"
 #include "ssd.h"
 
 #include <assert.h>
+#include <string.h>
 
 #define CAP_DSTRD 0
 #define CAP_MPSMIN 0
 #define CAP_MPSMAX 0
 #define CAP_MQES 1024
+
+static unsigned int sectors_per_page;
 
 /* Controller Configuration */
 static uint8_t cc_en;
@@ -37,15 +41,20 @@ struct nvme_queue {
 
 static struct nvme_queue nvme_queues[1 + CONFIG_NVME_IO_QUEUE_MAX];
 
-static inline int nvmeq_worker(int qid) { return qid; }
+static inline int nvmeq_worker(int qid)
+{
+    return THREAD_WORKER_START + qid - 1;
+}
 
-void hostif_nvme_init(void)
+void hostif_nvme_init(unsigned int sectors_in_page)
 {
     int i;
     for (i = 0; i <= CONFIG_NVME_IO_QUEUE_MAX; i++)
         nvme_queues[i].qid = INVALID_QID;
 
     nvme_queues[0].cq_vector = 0;
+
+    sectors_per_page = sectors_in_page;
 }
 
 static void init_nvme_queue(struct nvme_queue* nvmeq, unsigned int qid)
@@ -63,11 +72,12 @@ static int post_cqe(struct nvme_queue* nvmeq, int status, uint16_t command_id,
 {
     struct nvme_completion cqe;
 
+    memset(&cqe, 0, sizeof(cqe));
     cqe.status = (status << 1) | (nvmeq->cq_phase & 1);
     cqe.command_id = command_id;
     cqe.sq_id = nvmeq->qid;
     cqe.sq_head = nvmeq->sq_head;
-    cqe.result = *result;
+    if (result) cqe.result = *result;
 
     ivshmem_copy_to(nvmeq->cq_dma_addr + (nvmeq->cq_tail << cc_iocqes), &cqe,
                     sizeof(cqe));
@@ -76,6 +86,8 @@ static int post_cqe(struct nvme_queue* nvmeq, int status, uint16_t command_id,
         nvmeq->cq_tail = 0;
         nvmeq->cq_phase ^= 1;
     }
+
+    return 0;
 }
 
 static int process_set_features_command(struct nvme_features* cmd,
@@ -161,14 +173,58 @@ static void process_admin_command(struct nvme_command* cmd)
     post_cqe(&nvme_queues[0], status, cmd->common.command_id, &result);
 }
 
+static void segment_user_request(struct user_request* req, int worker)
+{
+    unsigned count = 0;
+    lha_t slba = req->start_lba;
+
+    while (count < req->sector_count) {
+        struct flash_transaction* txn;
+        unsigned int txn_size = sectors_per_page - slba % sectors_per_page;
+        lpa_t lpa = slba / sectors_per_page;
+        page_bitmap_t bitmap;
+
+        if (count + txn_size > req->sector_count)
+            txn_size = req->sector_count - count;
+
+        SLABALLOC(txn);
+        memset(txn, 0, sizeof(*txn));
+
+        bitmap = ~(~0ULL << txn_size);
+        bitmap <<= (slba % sectors_per_page);
+
+        txn->req = req;
+        txn->type = req->do_write ? TXN_WRITE : TXN_READ;
+        txn->source = TS_USER_IO;
+        txn->worker = worker;
+        txn->lpa = lpa;
+        txn->ppa = NO_PPA;
+        txn->length = txn_size << SECTOR_SHIFT;
+        txn->bitmap = bitmap;
+        list_add_tail(&txn->list, &req->txn_list);
+
+        slba += txn_size;
+        count += txn_size;
+    }
+}
+
 static void process_io_command(struct nvme_queue* nvmeq,
                                struct nvme_command* cmd)
 {
-    int do_write = cmd->rw.opcode == nvme_cmd_write;
-    uint64_t slba = cmd->rw.slba;
-    uint64_t length = cmd->rw.length;
+    struct user_request* req;
 
-    enqueue_rw_command(nvmeq_worker(nvmeq->qid), do_write, slba, length);
+    SLABALLOC(req);
+    memset(req, 0, sizeof(*req));
+
+    req->do_write = cmd->rw.opcode == nvme_cmd_write;
+    req->command_id = cmd->rw.command_id;
+    req->qid = nvmeq->qid;
+    req->start_lba = cmd->rw.slba;
+    req->sector_count = cmd->rw.length + 1;
+    INIT_LIST_HEAD(&req->txn_list);
+
+    segment_user_request(req, nvmeq_worker(nvmeq->qid));
+    enqueue_user_request(nvmeq_worker(nvmeq->qid), req);
 }
 
 static void fetch_next_request(struct nvme_queue* nvmeq)
@@ -302,4 +358,15 @@ void nvme_process_write_message(uint64_t addr, const char* buf, size_t len)
         }
         break;
     }
+}
+
+void nvme_complete_request(struct user_request* req)
+{
+    struct nvme_queue* nvmeq;
+
+    nvmeq = &nvme_queues[req->qid];
+    post_cqe(nvmeq, 0, req->command_id, NULL);
+    release_user_request(req);
+
+    hostif_send_irq(nvmeq->cq_vector);
 }

@@ -2,25 +2,23 @@
 #include "proto.h"
 #include "smp.h"
 #include "spinlock.h"
+#include "ssd.h"
 
 #include <errno.h>
 #include <string.h>
 
 enum {
-    EVENT_RW_COMMAND = 1,
-};
-
-struct rw_command_event {
-    int do_write;
-    uint64_t slba;
-    uint64_t length;
+    EVENT_USER_REQUEST = 1,
+    EVENT_FLASH_TRANSACTION = 2,
+    EVENT_TRANSACTION_COMPLETE = 3,
 };
 
 struct event {
     struct list_head list;
     int type;
     union {
-        struct rw_command_event rw;
+        struct user_request* request;
+        struct flash_transaction* txn;
     };
 };
 
@@ -35,7 +33,14 @@ void init_ssd_worker(void)
 
 void notify_worker(int worker) { smp_notify(worker); }
 
-int enqueue_rw_command(int worker, int do_write, uint64_t slba, uint64_t length)
+void release_user_request(struct user_request* req)
+{
+    struct flash_transaction *txn, *tmp;
+    list_for_each_entry_safe(txn, tmp, &req->txn_list, list) { SLABFREE(txn); }
+    SLABFREE(req);
+}
+
+int enqueue_user_request(int worker, struct user_request* req)
 {
     struct event* event;
 
@@ -43,14 +48,51 @@ int enqueue_rw_command(int worker, int do_write, uint64_t slba, uint64_t length)
     if (!event) return ENOMEM;
 
     memset(event, 0, sizeof(*event));
-    event->type = EVENT_RW_COMMAND;
-    event->rw.do_write = do_write;
-    event->rw.slba = slba;
-    event->rw.length = length;
+    event->type = EVENT_USER_REQUEST;
+    event->request = req;
 
     spin_lock(get_cpu_var_ptr(worker, event_queue_lock));
     list_add_tail(&event->list, get_cpu_var_ptr(worker, event_queue));
     spin_unlock(get_cpu_var_ptr(worker, event_queue_lock));
+
+    return 0;
+}
+
+int submit_transaction(struct flash_transaction* txn)
+{
+    struct event* event;
+
+    SLABALLOC(event);
+    if (!event) return ENOMEM;
+
+    memset(event, 0, sizeof(*event));
+    event->type = EVENT_FLASH_TRANSACTION;
+    event->txn = txn;
+
+    spin_lock(get_cpu_var_ptr(THREAD_TSU, event_queue_lock));
+    list_add_tail(&event->list, get_cpu_var_ptr(THREAD_TSU, event_queue));
+    spin_unlock(get_cpu_var_ptr(THREAD_TSU, event_queue_lock));
+
+    return 0;
+}
+
+int notify_transaction_complete(struct flash_transaction* txn)
+{
+    struct event* event;
+    int worker = txn->worker;
+
+    SLABALLOC(event);
+    if (!event) return ENOMEM;
+
+    memset(event, 0, sizeof(*event));
+    event->type = EVENT_TRANSACTION_COMPLETE;
+    event->txn = txn;
+
+    spin_lock(get_cpu_var_ptr(worker, event_queue_lock));
+    list_add_tail(&event->list, get_cpu_var_ptr(worker, event_queue));
+    spin_unlock(get_cpu_var_ptr(worker, event_queue_lock));
+
+    notify_worker(worker);
 
     return 0;
 }
@@ -79,11 +121,43 @@ out:
     return found;
 }
 
+static void process_user_request(struct user_request* req)
+{
+    dc_handle_user_request(req);
+}
+
 void process_worker_queue(void)
 {
     struct event event;
+    unsigned int self = smp_processor_id();
+    int found = 0;
 
     while (dequeue_event(&event)) {
-        printk("get event %d\r\n", event.type);
+        found++;
+
+        if (self == THREAD_TSU) {
+            switch (event.type) {
+            case EVENT_FLASH_TRANSACTION:
+                tsu_process_transaction(event.txn);
+                break;
+            }
+        } else {
+            switch (event.type) {
+            case EVENT_USER_REQUEST:
+                process_user_request(event.request);
+                break;
+            case EVENT_TRANSACTION_COMPLETE:
+                switch (event.txn->source) {
+                case TS_USER_IO:
+                    dc_transaction_complete(event.txn);
+                    break;
+                }
+
+                SLABFREE(event.txn);
+                break;
+            }
+        }
     }
+
+    if (self == THREAD_TSU && found) tsu_flush_queues();
 }

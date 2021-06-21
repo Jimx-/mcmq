@@ -46,6 +46,8 @@ uint64_t read_cycles();
 void restart_local_timer();
 void timer_interrupt();
 void stop_context(struct proc* p);
+time_ns_t current_time_ns(void);
+void setup_timer_oneshot(time_ns_t time);
 
 /* alloc.c */
 void mem_init(unsigned long mem_start, unsigned long free_mem_size);

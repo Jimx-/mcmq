@@ -16,7 +16,8 @@ EXTSRCS		= $(patsubst %.c, libfdt/%.c, $(LIBFDT_SRCS))
 SRCS		= head.S trap.S main.c fdt.c proc.c sched.c vm.c global.c direct_tty.c memory.c \
 				exc.c syscall.c irq.c timer.c user.c gate.S alloc.c slab.c virtio.c blk.c \
 				pci.c smp.c virtio_mmio.c virtio_pci.c vsock.c ivshmem.c ringbuf.c \
-				ssd/hostif.c ssd/hostif_nvme.c ssd/worker.c \
+				ssd/ssd.c ssd/hostif.c ssd/hostif_nvme.c ssd/worker.c ssd/data_cache.c ssd/amu.c \
+				ssd/block_manager.c ssd/tsu.c ssd/nvm_ctlr.c \
 				$(LIBSRCS) $(EXTSRCS)
 OBJS		= $(patsubst %.c, $(BUILD_PATH)/%.o, $(patsubst %.S, $(BUILD_PATH)/%.o, $(patsubst %.asm, $(BUILD_PATH)/%.o, $(SRCS))))
 
@@ -41,7 +42,7 @@ run :
 	@spike bbl
 
 qemu :
-	@qemu-system-riscv64 -smp 2 -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3
+	@qemu-system-riscv64 -smp 4 -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3
 
 qemudbg :
 	@qemu-system-riscv64 -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -s -S

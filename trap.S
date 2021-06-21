@@ -49,14 +49,12 @@
     csrr s8, sepc
     csrr s9, sbadaddr
     csrr s10, scause
-    csrr s11, sscratch
 
     sd s0, SSTATUSREG(sp)
     sd s7, SPREG(sp)
     sd s8, SEPCREG(sp)
     sd s9, SBADADDRREG(sp)
     sd s10, SCAUSEREG(sp)
-    sd s11, TPREG(sp)
 .endm
 
 .align 4
@@ -149,7 +147,6 @@ restore_all:
     ld x30, T5REG(sp)
     ld x31, T6REG(sp)
 
-    ld x4,  TPREG(sp)
     ld sp,  SPREG(sp)
 
     sret

@@ -11,6 +11,8 @@
 unsigned int timebase_freq;
 unsigned long context_switch_clock = 0;
 
+extern void ssd_timer_interrupt(void);
+
 void init_timer(void* dtb)
 {
     unsigned long cpu = fdt_path_offset(dtb, "/cpus");
@@ -32,6 +34,11 @@ uint64_t read_cycles()
     return n;
 }
 
+time_ns_t current_time_ns(void)
+{
+    return read_cycles() * (1000000000ULL / timebase_freq);
+}
+
 void restart_local_timer()
 {
     csr_set(sie, SIE_STIE);
@@ -40,10 +47,16 @@ void restart_local_timer()
     sbi_set_timer(cycles + timebase_freq);
 }
 
+void setup_timer_oneshot(time_ns_t time)
+{
+    csr_set(sie, SIE_STIE);
+    sbi_set_timer(time * timebase_freq / 1000000000ULL);
+}
+
 void timer_interrupt()
 {
     csr_clear(sie, SIE_STIE);
-    restart_local_timer();
+    ssd_timer_interrupt();
 }
 
 void stop_context(struct proc* p)
