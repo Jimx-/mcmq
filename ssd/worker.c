@@ -132,10 +132,8 @@ void process_worker_queue(void)
 {
     struct event event;
     unsigned int self = smp_processor_id();
-    int found = 0;
 
     while (dequeue_event(&event)) {
-        found++;
 
         if (self == THREAD_TSU) {
             switch (event.type) {
@@ -149,6 +147,12 @@ void process_worker_queue(void)
                 process_user_request(event.request);
                 break;
             case EVENT_TRANSACTION_COMPLETE:
+                printk("Flash %s transaction complete channel=%d, chip=%d, "
+                       "die=%d, plane=%d, block=%d, page=%d\r\n",
+                       event.txn->type == TXN_READ ? "read" : "write",
+                       event.txn->addr.channel_id, event.txn->addr.chip_id,
+                       event.txn->addr.die_id, event.txn->addr.plane_id,
+                       event.txn->addr.block_id, event.txn->addr.page_id);
                 switch (event.txn->source) {
                 case TS_USER_IO:
                     dc_transaction_complete(event.txn);
@@ -164,5 +168,5 @@ void process_worker_queue(void)
         }
     }
 
-    if (self == THREAD_TSU && found) tsu_flush_queues();
+    if (self == THREAD_TSU) tsu_flush_queues();
 }

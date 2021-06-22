@@ -277,19 +277,83 @@ static inline int mapping_entry_reserved(struct am_domain* domain, lpa_t lpa)
     return entry && entry->status == MES_WAITING;
 }
 
+static ppa_t get_ppa(struct am_domain* domain, lpa_t lpa)
+{
+    struct mapping_entry* entry;
+
+    entry = mt_find(&domain->table, lpa);
+    if (!entry) return NO_PPA;
+
+    assert(entry->status == MES_VALID);
+
+    mt_touch_lru(&domain->table, entry);
+    return entry->ppa;
+}
+
 static void assign_plane(struct flash_transaction* txn)
 {
+    /* struct am_domain* domain = domain_get(txn); */
     struct flash_address* addr = &txn->addr;
+    lpa_t lpa = txn->lpa;
 
-    addr->channel_id = 0;
-    addr->chip_id = 0;
-    addr->die_id = 0;
-    addr->plane_id = 0;
+#define ASSIGN_PHYS_ADDR(lpa, name, num) \
+    do {                                 \
+        addr->name##_id = lpa % num;     \
+        lpa = lpa / num;                 \
+    } while (0)
+
+    ASSIGN_PHYS_ADDR(lpa, channel, channel_count);
+    ASSIGN_PHYS_ADDR(lpa, chip, chips_per_channel);
+    ASSIGN_PHYS_ADDR(lpa, die, dies_per_chip);
+    ASSIGN_PHYS_ADDR(lpa, plane, planes_per_die);
+#undef ASSIGN_PHYS_ADDR
 }
 
 static void alloc_page_for_write(struct flash_transaction* txn, int for_gc)
 {
     struct am_domain* domain = domain_get(txn);
+    struct mapping_entry* entry = mt_find(&domain->table, txn->lpa);
+    assert(entry);
+
+    if (entry->ppa != NO_PPA) {
+        struct flash_address addr;
+
+        if (!for_gc) {
+            page_bitmap_t bitmap = entry->bitmap & txn->bitmap;
+            if (bitmap != entry->bitmap) {
+                /* Update read required. */
+                struct flash_transaction* read_tx;
+                page_bitmap_t read_bitmap = bitmap ^ entry->bitmap;
+                int i, count = 0;
+
+                for (i = 0; i < 64; i++) {
+                    if (read_bitmap & (1 << i)) count++;
+                }
+
+                SLABALLOC(read_tx);
+                assert(read_tx);
+
+                memset(read_tx, 0, sizeof(*read_tx));
+                read_tx->req = txn->req;
+                read_tx->type = TXN_READ;
+                read_tx->source = txn->source;
+                read_tx->worker = txn->worker;
+                read_tx->lpa = txn->lpa;
+                read_tx->ppa = entry->ppa;
+                read_tx->length = count << SECTOR_SHIFT;
+                read_tx->bitmap = read_bitmap;
+                read_tx->opaque = txn->opaque;
+                read_tx->related_write = txn;
+                INIT_LIST_HEAD(&read_tx->list);
+                ppa_to_address(entry->ppa, &read_tx->addr);
+
+                txn->related_read = read_tx;
+            }
+        }
+
+        ppa_to_address(entry->ppa, &addr);
+        bm_invalidate_page(&addr);
+    }
 
     bm_alloc_page(&txn->addr, for_gc);
     txn->ppa = address_to_ppa(&txn->addr);
@@ -443,19 +507,6 @@ static int reserve_slot(struct am_domain* domain, lpa_t lpa)
     }
 
     return retval;
-}
-
-static ppa_t get_ppa(struct am_domain* domain, lpa_t lpa)
-{
-    struct mapping_entry* entry;
-
-    entry = mt_find(&domain->table, lpa);
-    if (!entry) return NO_PPA;
-
-    assert(entry->status == MES_VALID);
-
-    mt_touch_lru(&domain->table, entry);
-    return entry->ppa;
 }
 
 static int translate_lpa(struct am_domain* domain,
@@ -657,6 +708,8 @@ void amu_dispatch(struct user_request* req)
         {
             if (txn->ppa_ready) {
                 submit_transaction(txn);
+
+                if (txn->related_read) submit_transaction(txn->related_read);
             }
         }
 

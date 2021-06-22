@@ -33,7 +33,9 @@ enum cache_mode {
 };
 
 struct ssd_config {
+    enum cache_mode cache_mode;
     size_t mapping_table_capacity;
+    size_t data_cache_capacity;
     unsigned int channel_count;
     unsigned int nr_chips_per_channel;
     unsigned int channel_transfer_rate;
@@ -56,6 +58,7 @@ int submit_transaction(struct flash_transaction* txn);
 int notify_transaction_complete(struct flash_transaction* txn);
 
 /* data_cache.c */
+void dc_init(enum cache_mode mode, size_t capacity_pages);
 void dc_handle_user_request(struct user_request* req);
 void dc_transaction_complete(struct flash_transaction* txn);
 

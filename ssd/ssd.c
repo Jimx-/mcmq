@@ -8,7 +8,9 @@ void ssd_init_config_default(struct ssd_config* config)
 {
     memset(config, 0, sizeof(*config));
 
-    config->mapping_table_capacity = 4096;
+    config->cache_mode = CM_NO_CACHE;
+    config->mapping_table_capacity = 2 << 20;
+    config->data_cache_capacity = 512 << 20;
     config->channel_count = 8;
     config->nr_chips_per_channel = 4;
     config->channel_transfer_rate = 300;
@@ -46,6 +48,9 @@ void ssd_init(struct ssd_config* config)
                                config->flash_config.block_erase_latency);
         }
     }
+
+    dc_init(config->cache_mode,
+            config->data_cache_capacity / config->flash_config.page_capacity);
 
     bm_init(config->channel_count, config->nr_chips_per_channel,
             config->flash_config.nr_dies_per_chip,
