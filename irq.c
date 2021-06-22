@@ -166,7 +166,6 @@ static void plic_handle_irq(void)
 
 void handle_irq(reg_t scause)
 {
-    printk("Interrupt %d\r\n", smp_processor_id());
     switch (scause & ~INTERRUPT_CAUSE_FLAG) {
     case INTERRUPT_CAUSE_SOFTWARE:
         software_interrupt();

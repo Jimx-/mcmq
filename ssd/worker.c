@@ -31,6 +31,8 @@ void init_ssd_worker(void)
     INIT_LIST_HEAD(get_cpulocal_var_ptr(event_queue));
 }
 
+unsigned int worker_self(void) { return smp_processor_id(); }
+
 void notify_worker(int worker) { smp_notify(worker); }
 
 void release_user_request(struct user_request* req)
@@ -150,6 +152,9 @@ void process_worker_queue(void)
                 switch (event.txn->source) {
                 case TS_USER_IO:
                     dc_transaction_complete(event.txn);
+                    break;
+                case TS_MAPPING:
+                    amu_transaction_complete(event.txn);
                     break;
                 }
 

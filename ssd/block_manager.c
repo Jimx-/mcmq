@@ -139,6 +139,8 @@ void bm_alloc_page(struct flash_address* addr, int for_gc)
     spin_unlock(&plane->lock);
 }
 
+void bm_invalidate_page(struct flash_address* addr) {}
+
 void bm_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
              unsigned int nr_dies_per_chip, unsigned int nr_planes_per_die,
              unsigned int nr_blocks_per_plane, unsigned int nr_pages_per_block)

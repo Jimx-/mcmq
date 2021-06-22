@@ -51,6 +51,8 @@ void kernel_main(unsigned int hart_id, void* dtb_phys)
     config.flash_config.nr_pages_per_block = 256;
     config.flash_config.page_capacity = 8192;
 
+    config.mapping_table_capacity = 16 << 20;
+
     ssd_init(&config);
 
     hostif_init_cpu();

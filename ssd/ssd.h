@@ -47,6 +47,7 @@ void ssd_init_config_default(struct ssd_config* config);
 
 /* worker.c */
 void init_ssd_worker(void);
+unsigned int worker_self(void);
 void notify_worker(int worker);
 int enqueue_user_request(int worker, struct user_request* req);
 void process_worker_queue(void);
@@ -64,13 +65,14 @@ void amu_init(size_t mt_capacity, unsigned int nr_channels,
               unsigned int nr_planes_per_die, unsigned int nr_blocks_per_plane,
               unsigned int nr_pages_per_block, unsigned int sectors_in_page);
 void amu_dispatch(struct user_request* req);
-void amu_notify_txn_complete(struct flash_transaction* txn);
+void amu_transaction_complete(struct flash_transaction* txn);
 
 /* block_manager.c */
 void bm_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
              unsigned int nr_dies_per_chip, unsigned int nr_planes_per_die,
              unsigned int nr_blocks_per_plane, unsigned int nr_pages_per_block);
 void bm_alloc_page(struct flash_address* addr, int for_gc);
+void bm_invalidate_page(struct flash_address* addr);
 
 /* tsu.c */
 void tsu_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,

@@ -345,16 +345,20 @@ static void dispatch_write(struct channel_data* channel, struct chip_data* chip,
 
 void nvm_ctlr_dispatch(struct list_head* txn_list)
 {
-    struct flash_transaction* head =
-        list_entry(txn_list->next, struct flash_transaction, queue);
+    struct flash_transaction* head;
     struct flash_transaction* txn;
-    struct channel_data* channel = &channel_data[head->addr.channel_id];
-    struct chip_data* chip =
-        &chip_data[head->addr.channel_id][head->addr.chip_id];
-    struct die_data* die = &chip->dies[head->addr.die_id];
+    struct channel_data* channel;
+    struct chip_data* chip;
+    struct die_data* die;
     unsigned int txn_count = 0;
 
     if (list_empty(txn_list)) return;
+
+    head = list_entry(txn_list->next, struct flash_transaction, queue);
+    channel = &channel_data[head->addr.channel_id];
+    chip = &chip_data[head->addr.channel_id][head->addr.chip_id];
+    die = &chip->dies[head->addr.die_id];
+
     assert(!die->active_cmd);
 
     list_for_each_entry(txn, txn_list, queue) { txn_count++; }

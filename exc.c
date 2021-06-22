@@ -64,4 +64,7 @@ void do_page_fault(int in_kernel, reg_t sbadaddr, reg_t sepc)
     printk(
         "page fault[in_kernel: %d, badaddr: %lx, sepc: %lx, ptbr: %lx/%lx]\r\n",
         in_kernel, sbadaddr, sepc, read_ptbr(), __pa(initial_pgd));
+
+    while (1)
+        ;
 }

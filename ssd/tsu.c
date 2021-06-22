@@ -10,6 +10,8 @@
 struct txn_queues {
     struct list_head read_queue;
     struct list_head write_queue;
+    struct list_head mapping_read_queue;
+    struct list_head mapping_write_queue;
     struct list_head gc_read_queue;
     struct list_head gc_write_queue;
     struct list_head gc_erase_queue;
@@ -36,6 +38,9 @@ void tsu_process_transaction(struct flash_transaction* txn)
         case TS_USER_IO:
             queue = &chip->read_queue;
             break;
+        case TS_MAPPING:
+            queue = &chip->mapping_read_queue;
+            break;
         case TS_GC:
             queue = &chip->gc_read_queue;
             break;
@@ -45,6 +50,9 @@ void tsu_process_transaction(struct flash_transaction* txn)
         switch (txn->source) {
         case TS_USER_IO:
             queue = &chip->write_queue;
+            break;
+        case TS_MAPPING:
+            queue = &chip->mapping_write_queue;
             break;
         case TS_GC:
             queue = &chip->gc_write_queue;
@@ -96,6 +104,8 @@ void alloc_queues(void)
             struct txn_queues* qs = &chip_queues[i][j];
             INIT_LIST_HEAD(&qs->read_queue);
             INIT_LIST_HEAD(&qs->write_queue);
+            INIT_LIST_HEAD(&qs->mapping_read_queue);
+            INIT_LIST_HEAD(&qs->mapping_write_queue);
             INIT_LIST_HEAD(&qs->gc_read_queue);
             INIT_LIST_HEAD(&qs->gc_write_queue);
             INIT_LIST_HEAD(&qs->gc_erase_queue);
@@ -106,7 +116,15 @@ void alloc_queues(void)
     memset(channel_rr_index, 0, channel_count * sizeof(unsigned int));
 }
 
-static int transaction_ready(struct flash_transaction* txn) { return TRUE; }
+static int transaction_ready(struct flash_transaction* txn)
+{
+    switch (txn->type) {
+    case TXN_WRITE:
+        return !txn->related_read;
+    default:
+        return TRUE;
+    }
+}
 
 static void dispatch_queue_request(struct list_head* q_prim,
                                    struct list_head* q_sec, enum txn_type type)
@@ -148,7 +166,7 @@ static void dispatch_queue_request(struct list_head* q_prim,
         }
     }
 
-    nvm_ctlr_dispatch(&dispatch_list);
+    if (!list_empty(&dispatch_list)) nvm_ctlr_dispatch(&dispatch_list);
 }
 
 static int dispatch_read_request(unsigned int channel, unsigned int chip)
@@ -156,17 +174,27 @@ static int dispatch_read_request(unsigned int channel, unsigned int chip)
     struct list_head *q_prim = NULL, *q_sec = NULL;
     struct txn_queues* queues = &chip_queues[channel][chip];
 
-    if (!list_empty(&queues->read_queue)) {
-        q_prim = &queues->read_queue;
-        if (!list_empty(&queues->gc_read_queue)) {
+    if (!list_empty(&queues->mapping_read_queue)) {
+        /* Prioritize read txns for mapping entries. */
+        q_prim = &queues->mapping_read_queue;
+
+        if (!list_empty(&queues->read_queue))
+            q_sec = &queues->read_queue;
+        else if (!list_empty(&queues->gc_read_queue))
             q_sec = &queues->gc_read_queue;
-        }
-    } else if (!list_empty(&queues->write_queue))
-        return FALSE;
-    else if (!list_empty(&queues->gc_read_queue))
-        q_prim = &queues->gc_read_queue;
-    else
-        return FALSE;
+    } else {
+        if (!list_empty(&queues->read_queue)) {
+            q_prim = &queues->read_queue;
+            if (!list_empty(&queues->gc_read_queue)) {
+                q_sec = &queues->gc_read_queue;
+            }
+        } else if (!list_empty(&queues->write_queue))
+            return FALSE;
+        else if (!list_empty(&queues->gc_read_queue))
+            q_prim = &queues->gc_read_queue;
+        else
+            return FALSE;
+    }
 
     if (nvm_ctlr_get_chip_status(channel, chip) != CS_IDLE) return FALSE;
 
@@ -179,15 +207,25 @@ static int dispatch_write_request(unsigned int channel, unsigned int chip)
     struct list_head *q_prim = NULL, *q_sec = NULL;
     struct txn_queues* queues = &chip_queues[channel][chip];
 
-    if (!list_empty(&queues->write_queue)) {
-        q_prim = &queues->write_queue;
-        if (!list_empty(&queues->gc_write_queue)) {
+    if (!list_empty(&queues->mapping_write_queue)) {
+        /* Prioritize write txns for mapping entries. */
+        q_prim = &queues->mapping_write_queue;
+
+        if (!list_empty(&queues->write_queue))
+            q_sec = &queues->write_queue;
+        else if (!list_empty(&queues->gc_write_queue))
             q_sec = &queues->gc_write_queue;
-        }
-    } else if (!list_empty(&queues->gc_write_queue))
-        q_prim = &queues->gc_write_queue;
-    else
-        return FALSE;
+    } else {
+        if (!list_empty(&queues->write_queue)) {
+            q_prim = &queues->write_queue;
+            if (!list_empty(&queues->gc_write_queue)) {
+                q_sec = &queues->gc_write_queue;
+            }
+        } else if (!list_empty(&queues->gc_write_queue))
+            q_prim = &queues->gc_write_queue;
+        else
+            return FALSE;
+    }
 
     if (nvm_ctlr_get_chip_status(channel, chip) != CS_IDLE) return FALSE;
 

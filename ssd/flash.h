@@ -30,6 +30,7 @@ enum txn_type {
 
 enum txn_source {
     TS_USER_IO,
+    TS_MAPPING,
     TS_GC,
 };
 
@@ -50,6 +51,10 @@ struct flash_transaction {
     unsigned long length;
     page_bitmap_t bitmap;
     int ppa_ready;
+    void* opaque;
+
+    struct flash_transaction* related_read;
+    struct flash_transaction* related_write;
 };
 
 enum flash_technology {
