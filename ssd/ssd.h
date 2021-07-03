@@ -32,10 +32,23 @@ enum cache_mode {
     CM_WRITE_CACHE,
 };
 
+enum block_selection_policy {
+    BSP_GREEDY,
+    BSP_RAND_GREEDY,
+    BSP_RANDOM,
+    BSP_RANDOM_P,
+    BSP_RANDOM_PP,
+    BSP_FIFO,
+};
+
 struct ssd_config {
+    unsigned int seed;
     enum cache_mode cache_mode;
     size_t mapping_table_capacity;
     size_t data_cache_capacity;
+    unsigned int gc_threshold;
+    unsigned int gc_hard_threshold;
+    enum block_selection_policy block_selection_policy;
     unsigned int channel_count;
     unsigned int nr_chips_per_channel;
     unsigned int channel_transfer_rate;
@@ -69,13 +82,25 @@ void amu_init(size_t mt_capacity, unsigned int nr_channels,
               unsigned int nr_pages_per_block, unsigned int sectors_in_page);
 void amu_dispatch(struct user_request* req);
 void amu_transaction_complete(struct flash_transaction* txn);
+ppa_t address_to_ppa(struct flash_address* addr);
+void amu_alloc_page_gc(struct flash_transaction* txn, int is_mapping);
+void amu_lock_lpa(lpa_t lpa, int is_mapping);
+void amu_unlock_lpa(lpa_t lpa, int is_mapping);
 
 /* block_manager.c */
 void bm_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
              unsigned int nr_dies_per_chip, unsigned int nr_planes_per_die,
-             unsigned int nr_blocks_per_plane, unsigned int nr_pages_per_block);
-void bm_alloc_page(struct flash_address* addr, int for_gc);
+             unsigned int nr_blocks_per_plane, unsigned int nr_pages_per_block,
+             unsigned int sectors_in_page,
+             enum block_selection_policy block_selection_policy,
+             unsigned int gc_threshold, unsigned int gc_hard_threshold);
+void bm_alloc_page(struct flash_address* addr, int for_gc, int for_mapping);
 void bm_invalidate_page(struct flash_address* addr);
+void bm_read_issued(struct flash_address* addr);
+void bm_read_completed(struct flash_address* addr);
+void bm_program_issued(struct flash_address* addr);
+void bm_program_completed(struct flash_address* addr);
+void bm_transaction_complete(struct flash_transaction* txn);
 
 /* tsu.c */
 void tsu_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
@@ -89,7 +114,9 @@ void tsu_notify_chip_idle(unsigned int channel, unsigned int chip);
 /* nvm_ctlr.c */
 void nvm_ctlr_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
                    unsigned int nr_dies_per_chip,
-                   unsigned int nr_planes_per_die);
+                   unsigned int nr_planes_per_die,
+                   unsigned int nr_blocks_per_plane,
+                   unsigned int nr_pages_per_block);
 void nvm_ctlr_init_channel(unsigned int channel_id, unsigned int channel_width,
                            time_ns_t t_RC, time_ns_t t_DSC);
 void nvm_ctlr_init_chip(unsigned int channel_id, unsigned int chip_id,
@@ -100,5 +127,7 @@ enum bus_status nvm_ctlr_get_channel_status(unsigned int channel);
 enum chip_status nvm_ctlr_get_chip_status(unsigned int channel,
                                           unsigned int chip);
 void nvm_ctlr_timer_interrupt(void);
+void nvm_ctlr_get_metadata(struct flash_address* addr,
+                           struct page_metadata* metadata);
 
 #endif

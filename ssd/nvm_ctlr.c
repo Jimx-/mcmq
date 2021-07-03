@@ -11,6 +11,8 @@ struct nvm_ctlr_stats {
     size_t multiplane_read_cmds;
     size_t program_cmds;
     size_t multiplane_program_cmds;
+    size_t erase_cmds;
+    size_t multiplane_erase_cmds;
 };
 
 static struct nvm_ctlr_stats stats;
@@ -25,10 +27,24 @@ struct channel_data {
     struct list_head waiting_read_xfer;
 };
 
+struct page {
+    struct page_metadata metadata;
+};
+
+struct block_data {
+    struct page* pages;
+};
+
+struct plane_data {
+    struct block_data* blocks;
+};
+
 struct die_data {
     struct list_head list;
     struct list_head active_txns;
     time_ns_t data_transfer_time;
+
+    struct plane_data* planes;
 
     struct flash_command cmd_buf;
     struct flash_command* active_cmd;
@@ -58,7 +74,7 @@ struct chip_data {
 };
 
 static unsigned int channel_count, chips_per_channel, dies_per_chip,
-    planes_per_die;
+    planes_per_die, blocks_per_plane, pages_per_block;
 
 static struct chip_data** chip_data;
 static struct channel_data* channel_data;
@@ -75,6 +91,34 @@ static inline time_ns_t
 nvddr2_data_out_transfer_time(struct channel_data* channel, size_t size)
 {
     return (size / channel->channel_width / 2) * channel->t_DSC;
+}
+
+static inline void get_metadata(struct flash_address* addr,
+                                struct page_metadata* metadata)
+{
+    *metadata = chip_data[addr->chip_id]
+                    ->dies[addr->die_id]
+                    .planes[addr->plane_id]
+                    .blocks[addr->block_id]
+                    .pages[addr->page_id]
+                    .metadata;
+}
+
+void nvm_ctlr_get_metadata(struct flash_address* addr,
+                           struct page_metadata* metadata)
+{
+    get_metadata(addr, metadata);
+}
+
+static inline void set_metadata(struct flash_address* addr,
+                                struct page_metadata* metadata)
+{
+    chip_data[addr->chip_id]
+        ->dies[addr->die_id]
+        .planes[addr->plane_id]
+        .blocks[addr->block_id]
+        .pages[addr->page_id]
+        .metadata = *metadata;
 }
 
 static inline get_command_latency(struct chip_data* chip,
@@ -115,9 +159,32 @@ static inline get_command_latency(struct chip_data* chip,
     }
 }
 
+static void init_page(struct page* page) { page->metadata.lpa = NO_LPA; }
+
+static void init_block(struct block_data* block)
+{
+    /* int i; */
+
+    /* for (i = 0; i < pages_per_block; i++) */
+    /*     init_page(&block->pages[i]); */
+}
+
+static void init_plane(struct plane_data* plane)
+{
+    int i;
+
+    for (i = 0; i < blocks_per_plane; i++)
+        init_block(&plane->blocks[i]);
+}
+
 static void init_die(struct die_data* die)
 {
+    int i;
+
     INIT_LIST_HEAD(&die->active_txns);
+
+    for (i = 0; i < planes_per_die; i++)
+        init_plane(&die->planes[i]);
 }
 
 static void set_channel_status(struct channel_data* channel,
@@ -144,42 +211,64 @@ static void init_chip(struct chip_data* chip)
 
 static void alloc_controller(void)
 {
-    size_t nr_ptrs, nr_chips, nr_dies, alloc_size;
+    size_t nr_ptrs, nr_chips, nr_dies, nr_planes, nr_blocks, nr_pages,
+        alloc_size;
     void* buf;
     void** cur_ptr;
+    size_t offset;
     struct chip_data* cur_chip;
     struct die_data* cur_die;
-    int i, j;
+    struct plane_data* cur_plane;
+    struct block_data* cur_block;
+    struct page* cur_page;
+    int i, j, k, l, m;
 
     nr_chips = channel_count * chips_per_channel;
     nr_dies = nr_chips * dies_per_chip;
+    nr_planes = nr_dies * planes_per_die;
+    nr_blocks = nr_planes * blocks_per_plane;
+    nr_pages = nr_blocks * pages_per_block;
     nr_ptrs = channel_count;
 
     alloc_size = nr_ptrs * sizeof(void*) + nr_chips * sizeof(struct chip_data) +
                  nr_dies * sizeof(struct die_data) +
-                 channel_count * sizeof(struct channel_data);
+                 channel_count * sizeof(struct channel_data) +
+                 nr_planes * sizeof(struct plane_data) +
+                 nr_blocks * sizeof(struct block_data) +
+                 nr_pages * sizeof(struct page);
     alloc_size = roundup(alloc_size, PG_SIZE);
 
     buf = vmalloc_pages(alloc_size >> PG_SHIFT, NULL);
     assert(buf);
 
     cur_ptr = (void**)buf;
-    cur_chip = (struct chip_data*)(buf + nr_ptrs * sizeof(void*));
-    cur_die = (struct die_data*)(buf + nr_ptrs * sizeof(void*) +
-                                 nr_chips * sizeof(struct chip_data));
-    channel_data = (struct channel_data*)(buf + nr_ptrs * sizeof(void*) +
-                                          nr_chips * sizeof(struct chip_data) +
-                                          nr_dies * sizeof(struct die_data));
+    offset = nr_ptrs * sizeof(void*);
+
+    cur_chip = (struct chip_data*)(buf + offset);
+    offset += nr_chips * sizeof(struct chip_data);
+
+    cur_die = (struct die_data*)(buf + offset);
+    offset += nr_dies * sizeof(struct die_data);
+
+    channel_data = (struct channel_data*)(buf + offset);
+    offset += channel_count * sizeof(struct channel_data);
+
+    cur_plane = (struct plane_data*)(buf + offset);
+    offset += nr_planes * sizeof(struct plane_data);
+
+    cur_block = (struct block_data*)(buf + offset);
+    offset += nr_blocks * sizeof(struct block_data);
+
+    cur_page = (struct page*)(buf + offset);
 
     chip_data = (struct chip_data**)cur_ptr;
     cur_ptr += channel_count;
 
     for (i = 0; i < channel_count; i++) {
         struct channel_data* channel = &channel_data[i];
-
+        memset(channel, 0, sizeof(*channel));
         chip_data[i] = cur_chip;
         cur_chip += chips_per_channel;
-        memset(channel, 0, sizeof(*channel));
         channel->channel_id = i;
         channel->status = BUS_IDLE;
 
@@ -190,6 +279,25 @@ static void alloc_controller(void)
             chip->channel = channel;
             chip->dies = cur_die;
             cur_die += dies_per_chip;
+
+            for (k = 0; k < dies_per_chip; k++) {
+                struct die_data* die = &chip->dies[k];
+                memset(die, 0, sizeof(*die));
+                die->planes = cur_plane;
+                cur_plane += planes_per_die;
+
+                for (l = 0; l < planes_per_die; l++) {
+                    struct plane_data* plane = &die->planes[l];
+                    plane->blocks = cur_block;
+                    cur_block += blocks_per_plane;
+
+                    for (m = 0; m < blocks_per_plane; m++) {
+                        struct block_data* block = &plane->blocks[m];
+                        block->pages = cur_page;
+                        cur_page += pages_per_block;
+                    }
+                }
+            }
 
             init_chip(chip);
         }
@@ -241,7 +349,9 @@ static void rearm_timer(void)
         }
     }
 
-    if (min_time != UINT64_MAX) setup_timer_oneshot(min_time);
+    if (min_time != UINT64_MAX) {
+        setup_timer_oneshot(min_time);
+    }
 }
 
 static int start_cmd_data_transfer(struct chip_data* chip)
@@ -300,7 +410,7 @@ static int start_data_out_transfer(struct channel_data* channel)
 static int start_die_command(struct chip_data* chip, struct flash_command* cmd)
 {
     time_ns_t now;
-    struct die_data* die = &chip->dies[cmd->addr.die_id];
+    struct die_data* die = &chip->dies[cmd->addrs[0].die_id];
 
     if (cmd->nr_addrs > 1)
         assert(cmd->cmd_code != CMD_READ_PAGE &&
@@ -309,7 +419,7 @@ static int start_die_command(struct chip_data* chip, struct flash_command* cmd)
 
     now = current_time_ns();
     die->cmd_finish_time =
-        now + get_command_latency(chip, cmd->cmd_code, cmd->addr.page_id);
+        now + get_command_latency(chip, cmd->cmd_code, cmd->addrs[0].page_id);
     die->current_cmd = cmd;
     chip->active_dies++;
 
@@ -343,6 +453,16 @@ static void dispatch_write(struct channel_data* channel, struct chip_data* chip,
     start_cmd_data_transfer(chip);
 }
 
+static void dispatch_erase(struct channel_data* channel, struct chip_data* chip,
+                           struct die_data* die)
+{
+    /* Ignore command read latency. */
+    die->data_transfer_time = 0;
+    list_add_tail(&die->list, &chip->cmd_xfer_queue);
+
+    start_cmd_data_transfer(chip);
+}
+
 void nvm_ctlr_dispatch(struct list_head* txn_list)
 {
     struct flash_transaction* head;
@@ -361,15 +481,23 @@ void nvm_ctlr_dispatch(struct list_head* txn_list)
 
     assert(!die->active_cmd);
 
-    list_for_each_entry(txn, txn_list, queue) { txn_count++; }
-
     assert(channel->status == BUS_IDLE || chip->current_xfer);
 
-    list_splice_init(txn_list, &die->active_txns);
-
     die->active_cmd = &die->cmd_buf;
+    list_for_each_entry(txn, txn_list, queue)
+    {
+        assert(txn_count < MAX_CMD_ADDRS);
+
+        struct flash_address* addr = &die->active_cmd->addrs[txn_count];
+        struct page_metadata* metadata =
+            &die->active_cmd->metadata[txn_count++];
+        *addr = txn->addr;
+        metadata->lpa = txn->lpa;
+    }
+
     die->active_cmd->nr_addrs = txn_count;
-    die->active_cmd->addr = head->addr;
+
+    list_splice_init(txn_list, &die->active_txns);
 
     set_channel_status(channel, BUS_BUSY);
 
@@ -395,6 +523,17 @@ void nvm_ctlr_dispatch(struct list_head* txn_list)
         }
 
         dispatch_write(channel, chip, die);
+        break;
+    case TXN_ERASE:
+        if (txn_count == 1) {
+            stats.erase_cmds++;
+            die->active_cmd->cmd_code = CMD_ERASE_BLOCK;
+        } else {
+            stats.multiplane_erase_cmds++;
+            die->active_cmd->cmd_code = CMD_ERASE_BLOCK_MULTIPLANE;
+        }
+
+        dispatch_erase(channel, chip, die);
         break;
     }
 
@@ -426,6 +565,9 @@ static void complete_chip_transfer(struct chip_data* chip)
     case TXN_WRITE:
         set_chip_status(chip, CS_WRITING);
         break;
+    case TXN_ERASE:
+        set_chip_status(chip, CS_ERASING);
+        break;
     }
 
     set_channel_status(channel, BUS_IDLE);
@@ -436,6 +578,7 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
 {
     struct flash_command* cmd = die->current_cmd;
     struct flash_transaction* txn;
+    int i;
 
     die->current_cmd = NULL;
     die->cmd_finish_time = UINT64_MAX;
@@ -443,6 +586,9 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
     switch (cmd->cmd_code) {
     case CMD_READ_PAGE:
     case CMD_READ_PAGE_MULTIPLANE:
+        for (i = 0; i < cmd->nr_addrs; i++)
+            get_metadata(&cmd->addrs[i], &cmd->metadata[i]);
+
         if (!--chip->active_dies) set_chip_status(chip, CS_WAIT_FOR_DATA_OUT);
 
         list_for_each_entry(txn, &die->active_txns, queue)
@@ -455,6 +601,9 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
         break;
     case CMD_PROGRAM_PAGE:
     case CMD_PROGRAM_PAGE_MULTIPLANE:
+        for (i = 0; i < cmd->nr_addrs; i++)
+            set_metadata(&cmd->addrs[i], &cmd->metadata[i]);
+
         list_for_each_entry(txn, &die->active_txns, queue)
         {
             notify_transaction_complete(txn);
@@ -463,7 +612,18 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
         die->active_cmd = NULL;
 
         if (!--chip->active_dies) set_chip_status(chip, CS_IDLE);
+        break;
+    case CMD_ERASE_BLOCK:
+    case CMD_ERASE_BLOCK_MULTIPLANE:
+        list_for_each_entry(txn, &die->active_txns, queue)
+        {
+            notify_transaction_complete(txn);
+        }
 
+        INIT_LIST_HEAD(&die->active_txns);
+        die->active_cmd = NULL;
+
+        if (!--chip->active_dies) set_chip_status(chip, CS_IDLE);
         break;
     }
 
@@ -477,9 +637,16 @@ static void complete_data_out_transfer(struct chip_data* chip,
                                        struct die_data* die)
 {
     struct flash_transaction* txn = die->active_xfer;
+    struct flash_command* cmd = die->active_cmd;
+    int i;
 
     die->active_xfer = NULL;
     die->xfer_complete_time = UINT64_MAX;
+
+    for (i = 0; i < cmd->nr_addrs; i++) {
+        if (cmd->addrs[i].plane_id == txn->addr.plane_id)
+            txn->lpa = cmd->metadata[i].lpa;
+    }
 
     list_del(&txn->queue);
     notify_transaction_complete(txn);
@@ -559,12 +726,16 @@ void nvm_ctlr_init_chip(unsigned int channel_id, unsigned int chip_id,
 
 void nvm_ctlr_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
                    unsigned int nr_dies_per_chip,
-                   unsigned int nr_planes_per_die)
+                   unsigned int nr_planes_per_die,
+                   unsigned int nr_blocks_per_plane,
+                   unsigned int nr_pages_per_block)
 {
     channel_count = nr_channels;
     chips_per_channel = nr_chips_per_channel;
     dies_per_chip = nr_dies_per_chip;
     planes_per_die = nr_planes_per_die;
+    blocks_per_plane = nr_blocks_per_plane;
+    pages_per_block = nr_pages_per_block;
 
     alloc_controller();
 }

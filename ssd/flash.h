@@ -22,7 +22,6 @@ struct flash_address {
 };
 
 enum txn_type {
-    TXN_UNKNOWN,
     TXN_READ,
     TXN_WRITE,
     TXN_ERASE,
@@ -40,6 +39,7 @@ struct flash_transaction {
     struct list_head list;
     struct list_head queue;
     struct list_head waiting_list;
+    struct list_head page_movement_list;
     struct user_request* req;
     enum txn_type type;
     enum txn_source source;
@@ -55,6 +55,7 @@ struct flash_transaction {
 
     struct flash_transaction* related_read;
     struct flash_transaction* related_write;
+    struct flash_transaction* related_erase;
 };
 
 enum flash_technology {
@@ -108,10 +109,17 @@ enum flash_command_code {
     CMD_ERASE_BLOCK_MULTIPLANE = 0x60d1,
 };
 
+struct page_metadata {
+    lpa_t lpa;
+};
+
+#define MAX_CMD_ADDRS 10
+
 struct flash_command {
     enum flash_command_code cmd_code;
     unsigned int nr_addrs;
-    struct flash_address addr;
+    struct flash_address addrs[MAX_CMD_ADDRS];
+    struct page_metadata metadata[MAX_CMD_ADDRS];
 };
 
 #endif

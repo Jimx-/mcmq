@@ -9,8 +9,8 @@ typedef unsigned long bitchunk_t;
 
 #define MAP_CHUNK(map, bit) (map)[((bit) / BITCHUNK_BITS)]
 #define CHUNK_OFFSET(bit) ((bit) % BITCHUNK_BITS)
-#define GET_BIT(map, bit) (MAP_CHUNK(map, bit) & (1 << CHUNK_OFFSET(bit)))
-#define SET_BIT(map, bit) (MAP_CHUNK(map, bit) |= (1 << CHUNK_OFFSET(bit)))
-#define UNSET_BIT(map, bit) (MAP_CHUNK(map, bit) &= ~(1 << CHUNK_OFFSET(bit)))
+#define GET_BIT(map, bit) (MAP_CHUNK(map, bit) & (1UL << CHUNK_OFFSET(bit)))
+#define SET_BIT(map, bit) (MAP_CHUNK(map, bit) |= (1UL << CHUNK_OFFSET(bit)))
+#define UNSET_BIT(map, bit) (MAP_CHUNK(map, bit) &= ~(1UL << CHUNK_OFFSET(bit)))
 
 #endif

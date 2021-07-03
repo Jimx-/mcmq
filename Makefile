@@ -11,7 +11,7 @@ SRC_PATH	= .
 BUILD_PATH  = ./obj
 LIBSRCS		= lib/vsprintf.c lib/strlen.c lib/memcpy.c lib/memcmp.c lib/memchr.c lib/memmove.c \
 				lib/memset.c lib/strnlen.c lib/strrchr.c lib/strtoul.c lib/strchr.c lib/strcmp.c \
-				lib/assert.c
+				lib/assert.c lib/rand.c
 EXTSRCS		= $(patsubst %.c, libfdt/%.c, $(LIBFDT_SRCS))
 SRCS		= head.S trap.S main.c fdt.c proc.c sched.c vm.c global.c direct_tty.c memory.c \
 				exc.c syscall.c irq.c timer.c user.c gate.S alloc.c slab.c virtio.c blk.c \
@@ -45,7 +45,7 @@ qemu :
 	@qemu-system-riscv64 -smp 4 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3
 
 qemudbg :
-	@qemu-system-riscv64 -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -s -S
+	@qemu-system-riscv64 -smp 4 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -s -S
 
 clean :
 	rm $(KERNEL)

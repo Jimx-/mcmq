@@ -71,7 +71,7 @@ static void virtio_vsock_fill_rx(void)
     struct virtio_buffer bufs[2];
     int retval;
 
-    while (vq->free_num) {
+    while (vq->free_num > 2) {
         SLABALLOC(pkt);
         if (!pkt) break;
         memset(pkt, 0, sizeof(*pkt));

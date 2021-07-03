@@ -8,9 +8,13 @@ void ssd_init_config_default(struct ssd_config* config)
 {
     memset(config, 0, sizeof(*config));
 
+    config->seed = 123;
     config->cache_mode = CM_NO_CACHE;
     config->mapping_table_capacity = 2 << 20;
     config->data_cache_capacity = 512 << 20;
+    config->gc_threshold = 20;
+    config->gc_hard_threshold = 200;
+    config->block_selection_policy = BSP_GREEDY;
     config->channel_count = 8;
     config->nr_chips_per_channel = 4;
     config->channel_transfer_rate = 300;
@@ -36,7 +40,9 @@ void ssd_init(struct ssd_config* config)
 
     nvm_ctlr_init(config->channel_count, config->nr_chips_per_channel,
                   config->flash_config.nr_dies_per_chip,
-                  config->flash_config.nr_planes_per_die);
+                  config->flash_config.nr_planes_per_die,
+                  config->flash_config.nr_blocks_per_plane,
+                  config->flash_config.nr_pages_per_block);
     for (i = 0; i < config->channel_count; i++) {
         nvm_ctlr_init_channel(
             i, config->channel_width,
@@ -56,7 +62,10 @@ void ssd_init(struct ssd_config* config)
             config->flash_config.nr_dies_per_chip,
             config->flash_config.nr_planes_per_die,
             config->flash_config.nr_blocks_per_plane,
-            config->flash_config.nr_pages_per_block);
+            config->flash_config.nr_pages_per_block,
+            config->flash_config.page_capacity >> SECTOR_SHIFT,
+            config->block_selection_policy, config->gc_threshold,
+            config->gc_hard_threshold);
 
     amu_init(config->mapping_table_capacity, config->channel_count,
              config->nr_chips_per_channel,

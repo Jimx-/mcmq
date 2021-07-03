@@ -69,6 +69,7 @@ struct virtio_queue {
     unsigned int free_head;
     unsigned int free_tail;
     unsigned int last_used;
+    unsigned int avail_idx_shadow;
 
     void** data;
     size_t data_size;
@@ -181,6 +182,7 @@ int virtqueue_add_buffers(struct virtio_queue* vq, struct virtio_buffer* bufs,
 int virtqueue_get_buffer(struct virtio_queue* vq, size_t* len, void** data);
 int virtqueue_kick(struct virtio_queue* vq);
 int virtqueue_interrupt(int irq, struct virtio_queue* vq);
+void virtqueue_dump(struct virtio_queue* vq);
 
 int virtio_device_supports(struct virtio_dev* dev, int bit);
 

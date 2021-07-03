@@ -100,4 +100,9 @@ void ivshmem_copy_to(shmem_addr_t dst, void* src, size_t len);
 
 static inline void wait_for_interrupt(void) { __asm__ __volatile__("wfi"); }
 
+/* lib/rand.c */
+void init_genrand(unsigned long s);
+unsigned long genrand_int32(void);
+long genrand_int31(void);
+
 #endif

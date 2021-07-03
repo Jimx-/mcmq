@@ -50,6 +50,16 @@ struct mapping_table {
     struct list_head lru_list;
 };
 
+struct lock_entry {
+    lpa_t lpa;
+    struct avl_node avl;
+};
+
+struct lock_table {
+    spinlock_t lock;
+    struct avl_root root;
+};
+
 /* Global translation directory entry. */
 struct gtd_entry {
     ppa_t mppn;
@@ -73,6 +83,12 @@ struct am_domain {
     struct list_head waiting_read_txns;
     struct list_head waiting_write_txns;
     spinlock_t lock;
+
+    struct lock_table lpa_lock_table;
+    struct lock_table mvpn_lock_table;
+
+    struct list_head locked_user_txns;
+    struct list_head locked_mapping_txns;
 };
 
 static struct am_domain g_domain;
@@ -118,7 +134,7 @@ static inline void ppa_to_address(ppa_t ppa, struct flash_address* addr)
 #undef XLATE_PPA
 }
 
-static inline ppa_t address_to_ppa(struct flash_address* addr)
+ppa_t address_to_ppa(struct flash_address* addr)
 {
     return pages_per_chip *
                (chips_per_channel * addr->channel_id + addr->chip_id) +
@@ -266,6 +282,65 @@ static struct mapping_entry* mt_evict_entry(struct mapping_table* mt)
     return entry;
 }
 
+static int lt_key_node_comp(void* key, struct avl_node* node)
+{
+    struct lock_entry* r1 = (struct lock_entry*)key;
+    struct lock_entry* r2 = avl_entry(node, struct lock_entry, avl);
+
+    if (r1->lpa < r2->lpa)
+        return -1;
+    else if (r1->lpa > r2->lpa)
+        return 1;
+    return 0;
+}
+
+static int lt_node_node_comp(struct avl_node* node1, struct avl_node* node2)
+{
+    struct lock_entry* r1 = avl_entry(node1, struct lock_entry, avl);
+    struct lock_entry* r2 = avl_entry(node2, struct lock_entry, avl);
+
+    if (r1->lpa < r2->lpa)
+        return -1;
+    else if (r1->lpa > r2->lpa)
+        return 1;
+    return 0;
+}
+
+static void lt_init(struct lock_table* lt)
+{
+    spin_lock_init(&lt->lock);
+    INIT_AVL_ROOT(&lt->root, lt_key_node_comp, lt_node_node_comp);
+}
+
+static struct lock_entry* lt_find(struct lock_table* lt, lpa_t lpa)
+{
+    struct avl_node* node = lt->root.node;
+    struct lock_entry* entry = NULL;
+
+    while (node) {
+        entry = avl_entry(node, struct lock_entry, avl);
+
+        if (entry->lpa == lpa) {
+            return entry;
+        } else if (lpa < entry->lpa)
+            node = node->left;
+        else if (lpa > entry->lpa)
+            node = node->right;
+    }
+
+    return NULL;
+}
+
+static inline int is_lpa_locked_for_gc(struct am_domain* domain, lpa_t lpa)
+{
+    return lt_find(&domain->lpa_lock_table, lpa) != NULL;
+}
+
+static inline int is_mvpn_locked_for_gc(struct am_domain* domain, lpa_t mvpn)
+{
+    return lt_find(&domain->mvpn_lock_table, mvpn) != NULL;
+}
+
 static inline int mapping_entry_exists(struct am_domain* domain, lpa_t lpa)
 {
     return mt_find(&domain->table, lpa) != NULL;
@@ -290,12 +365,26 @@ static ppa_t get_ppa(struct am_domain* domain, lpa_t lpa)
     return entry->ppa;
 }
 
+static inline void queue_locked_user_transaction(struct am_domain* domain,
+                                                 struct flash_transaction* txn)
+{
+    list_add(&txn->waiting_list, &domain->locked_user_txns);
+}
+
+static inline void
+queue_locked_mapping_transaction(struct am_domain* domain,
+                                 struct flash_transaction* txn)
+{
+    list_add(&txn->waiting_list, &domain->locked_user_txns);
+}
+
 static void assign_plane(struct flash_transaction* txn)
 {
     /* struct am_domain* domain = domain_get(txn); */
     struct flash_address* addr = &txn->addr;
     lpa_t lpa = txn->lpa;
 
+    lpa = 0;
 #define ASSIGN_PHYS_ADDR(lpa, name, num) \
     do {                                 \
         addr->name##_id = lpa % num;     \
@@ -327,7 +416,7 @@ static void alloc_page_for_write(struct flash_transaction* txn, int for_gc)
                 int i, count = 0;
 
                 for (i = 0; i < 64; i++) {
-                    if (read_bitmap & (1 << i)) count++;
+                    if (read_bitmap & (1UL << i)) count++;
                 }
 
                 SLABALLOC(read_tx);
@@ -346,6 +435,7 @@ static void alloc_page_for_write(struct flash_transaction* txn, int for_gc)
                 read_tx->related_write = txn;
                 INIT_LIST_HEAD(&read_tx->list);
                 ppa_to_address(entry->ppa, &read_tx->addr);
+                bm_read_issued(&read_tx->addr);
 
                 txn->related_read = read_tx;
             }
@@ -355,7 +445,7 @@ static void alloc_page_for_write(struct flash_transaction* txn, int for_gc)
         bm_invalidate_page(&addr);
     }
 
-    bm_alloc_page(&txn->addr, for_gc);
+    bm_alloc_page(&txn->addr, for_gc, FALSE);
     txn->ppa = address_to_ppa(&txn->addr);
     mt_update_mapping(&domain->table, txn->lpa, txn->ppa, txn->bitmap, FALSE,
                       FALSE);
@@ -374,10 +464,26 @@ static void alloc_page_for_mapping(struct flash_transaction* txn, lpa_t mvpn,
         bm_invalidate_page(&addr);
     }
 
-    bm_alloc_page(&txn->addr, for_gc);
+    bm_alloc_page(&txn->addr, for_gc, TRUE);
     txn->ppa = address_to_ppa(&txn->addr);
     gtd->mppn = txn->ppa;
     gtd->timestamp = current_time_ns();
+}
+
+void amu_alloc_page_gc(struct flash_transaction* txn, int is_mapping)
+{
+    struct am_domain* domain = domain_get(txn);
+
+    spin_lock(&domain->lock);
+
+    if (is_mapping) {
+        alloc_page_for_mapping(txn, txn->lpa, TRUE);
+    } else {
+        alloc_page_for_write(txn, TRUE);
+    }
+    txn->ppa_ready = TRUE;
+
+    spin_unlock(&domain->lock);
 }
 
 static void submit_mapping_read(struct am_domain* domain, lpa_t lpa)
@@ -401,6 +507,14 @@ static void submit_mapping_read(struct am_domain* domain, lpa_t lpa)
     read_tx->bitmap = (1 << sectors_per_page) - 1;
     read_tx->opaque = (void*)mvpn;
 
+    if (is_mvpn_locked_for_gc(domain, mvpn)) {
+        queue_locked_mapping_transaction(domain, read_tx);
+        return;
+    }
+
+    ppa_to_address(mppn, &read_tx->addr);
+    bm_read_issued(&read_tx->addr);
+
     submit_transaction(read_tx);
     stats.total_flash_reads_for_mapping++;
 
@@ -418,6 +532,7 @@ static void submit_mapping_writeback(struct am_domain* domain, lpa_t lpa)
     size_t read_size = 0;
     struct flash_transaction *read_tx = NULL, *write_tx;
     ppa_t mppn;
+    int locked = is_mvpn_locked_for_gc(domain, mvpn);
 
     start_key.lpa = start_lpa;
     mt_avl_start_iter(&domain->table, &iter, &start_key, AVL_GREATER_EQUAL);
@@ -451,9 +566,15 @@ static void submit_mapping_writeback(struct am_domain* domain, lpa_t lpa)
     write_tx->ppa = NO_PPA;
     write_tx->length = sectors_per_page << SECTOR_SHIFT;
     write_tx->bitmap = (1 << sectors_per_page) - 1;
-    assign_plane(write_tx);
-    alloc_page_for_mapping(write_tx, mvpn, FALSE);
-    stats.total_flash_writes_for_mapping++;
+
+    if (locked) {
+        queue_locked_mapping_transaction(domain, write_tx);
+        return;
+    } else {
+        assign_plane(write_tx);
+        alloc_page_for_mapping(write_tx, mvpn, FALSE);
+        stats.total_flash_writes_for_mapping++;
+    }
 
     if (mppn != NO_PPA && read_size) {
         SLABALLOC(read_tx);
@@ -468,6 +589,7 @@ static void submit_mapping_writeback(struct am_domain* domain, lpa_t lpa)
         read_tx->bitmap = read_bitmap;
         read_tx->opaque = (void*)mvpn;
         ppa_to_address(mppn, &read_tx->addr);
+        bm_read_issued(&read_tx->addr);
 
         read_tx->related_write = write_tx;
         stats.total_flash_reads_for_mapping++;
@@ -523,6 +645,7 @@ static int translate_lpa(struct am_domain* domain,
             txn->ppa = ppa;
             ppa_to_address(txn->ppa, &txn->addr);
         }
+        bm_read_issued(&txn->addr);
         txn->ppa_ready = TRUE;
 
         return TRUE;
@@ -647,6 +770,9 @@ static void domain_init(struct am_domain* domain, size_t capacity,
     INIT_LIST_HEAD(&domain->waiting_read_txns);
     INIT_LIST_HEAD(&domain->waiting_write_txns);
 
+    INIT_LIST_HEAD(&domain->locked_user_txns);
+    INIT_LIST_HEAD(&domain->locked_mapping_txns);
+
     domain->translation_entries_per_page = translation_entries_per_page;
     domain->gtd_entry_size = gtd_entry_size;
 
@@ -668,6 +794,9 @@ static void domain_init(struct am_domain* domain, size_t capacity,
         domain->gmt[i].timestamp = 0;
         domain->gmt[i].bitmap = 0;
     }
+
+    lt_init(&domain->lpa_lock_table);
+    lt_init(&domain->mvpn_lock_table);
 }
 
 void amu_init(size_t mt_capacity, unsigned int nr_channels,
@@ -700,7 +829,11 @@ void amu_dispatch(struct user_request* req)
 
     list_for_each_entry(txn, &req->txn_list, list)
     {
-        translate_transaction(txn);
+        struct am_domain* domain = domain_get(txn);
+        if (is_lpa_locked_for_gc(domain, txn->lpa))
+            queue_locked_user_transaction(domain, txn);
+        else
+            translate_transaction(txn);
     }
 
     if (!list_empty(&req->txn_list)) {
@@ -783,4 +916,84 @@ void amu_transaction_complete(struct flash_transaction* txn)
 
         tsu_kick();
     }
+}
+
+void amu_lock_lpa(lpa_t lpa, int is_mapping)
+{
+    struct am_domain* domain = &g_domain;
+    struct lock_table* table;
+    struct lock_entry* entry;
+
+    SLABALLOC(entry);
+    assert(entry);
+
+    entry->lpa = lpa;
+    if (is_mapping) {
+        table = &domain->mvpn_lock_table;
+    } else {
+        table = &domain->lpa_lock_table;
+    }
+
+    spin_lock(&table->lock);
+    avl_insert(&entry->avl, &table->root);
+    spin_unlock(&table->lock);
+}
+
+static void restart_locked_user_transactions(struct am_domain* domain,
+                                             lpa_t lpa)
+{
+    struct flash_transaction *txn, *tmp;
+
+    list_for_each_entry_safe(txn, tmp, &domain->locked_user_txns, waiting_list)
+    {
+        if (txn->lpa == lpa) {
+            list_del(&txn->waiting_list);
+            notify_transaction_complete(txn);
+        }
+    }
+}
+
+static void restart_locked_mapping_transactions(struct am_domain* domain,
+                                                lpa_t mvpn)
+{
+    struct flash_transaction *txn, *tmp;
+
+    list_for_each_entry_safe(txn, tmp, &domain->locked_mapping_txns,
+                             waiting_list)
+    {
+        if (txn->lpa == mvpn) {
+            list_del(&txn->waiting_list);
+            notify_transaction_complete(txn);
+        }
+    }
+}
+
+void amu_unlock_lpa(lpa_t lpa, int is_mapping)
+{
+    struct am_domain* domain = &g_domain;
+    struct lock_table* table;
+    struct lock_entry* entry;
+
+    spin_lock(&domain->lock);
+
+    if (is_mapping) {
+        table = &domain->mvpn_lock_table;
+    } else {
+        table = &domain->lpa_lock_table;
+    }
+
+    spin_lock(&table->lock);
+    entry = lt_find(table, lpa);
+    assert(entry);
+    avl_erase(&entry->avl, &table->root);
+    SLABFREE(entry);
+    spin_unlock(&table->lock);
+
+    if (is_mapping) {
+        restart_locked_mapping_transactions(domain, lpa);
+    } else {
+        restart_locked_user_transactions(domain, lpa);
+    }
+
+    spin_unlock(&domain->lock);
 }

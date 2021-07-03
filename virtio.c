@@ -5,6 +5,8 @@
 #include "global.h"
 #include "proto.h"
 
+#include <assert.h>
+
 struct virtio_queue* vring_create_virtqueue(struct virtio_dev* vdev,
                                             unsigned int index,
                                             unsigned int num,
@@ -61,6 +63,7 @@ struct virtio_queue* vring_create_virtqueue(struct virtio_dev* vdev,
     vq->free_head = 0;
     vq->free_tail = vq->num - 1;
     vq->last_used = 0;
+    vq->avail_idx_shadow = 0;
 
     return vq;
 
@@ -92,6 +95,7 @@ static void set_direct_descriptors(struct virtio_queue* vq,
     for (i = vq->free_head, j = 0; j < count; j++) {
         vd = &vring->desc[i];
 
+        assert(vd->flags & VRING_DESC_F_NEXT);
         use_vring_desc(vd, &bufs[j]);
         i = vd->next;
     }
@@ -112,11 +116,12 @@ int virtqueue_add_buffers(struct virtio_queue* vq, struct virtio_buffer* bufs,
 
     set_direct_descriptors(vq, bufs, count);
 
-    vring->avail->ring[vring->avail->idx % vq->num] = old_head;
+    vring->avail->ring[vq->avail_idx_shadow % vq->num] = old_head;
     vq->data[old_head] = data;
+    vq->avail_idx_shadow++;
 
     mb();
-    vring->avail->idx++;
+    vring->avail->idx = vq->avail_idx_shadow;
     mb();
 
     return 0;
@@ -249,4 +254,32 @@ struct virtio_dev* virtio_probe_device(uint32_t subdid,
     INIT_LIST_HEAD(&dev->virtqueues);
 
     return dev;
+}
+
+void virtqueue_dump(struct virtio_queue* vq)
+{
+    int i;
+    printk("==============================\r\n");
+    printk("Index = %d, num = %d\r\n", vq->index, vq->num);
+    printk("Free num = %d, head = %d, tail = %d\r\n", vq->free_num,
+           vq->free_head, vq->free_tail);
+    printk("Last used = %d\r\n", vq->last_used);
+    printk("Avail index = %d\r\n", vq->avail_idx_shadow);
+    printk("=============DESC=============\r\n");
+    for (i = 0; i < vq->num; i++) {
+        struct virtq_desc* vd = &vq->vring.desc[i];
+        printk("%d: ", i);
+        if (vd->flags & VRING_DESC_F_NEXT) printk("-> %d ", vd->next);
+        if (i == vq->free_head) printk("(FREE HEAD)");
+        if (i == vq->free_tail) printk("(FREE TAIL)");
+        printk("\r\n");
+    }
+    printk("=============RING=============\r\n");
+    for (i = 0; i < vq->num; i++) {
+        printk("%d: %d ", i, vq->vring.avail->ring[i]);
+        if (i == vq->last_used % vq->num) printk("(LAST USED)");
+        if (i == vq->avail_idx_shadow % vq->num) printk("(AVAIL IDX)");
+
+        printk("\r\n");
+    }
 }
