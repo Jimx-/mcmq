@@ -13,6 +13,7 @@
 #define MT_WRITE 2
 #define MT_READ_COMP 3
 #define MT_IRQ 4
+#define MT_READY 5
 
 #define MESSAGE_RINGBUF_DEFAULT_CAPACITY (PG_SIZE * 4 - 1)
 
@@ -84,6 +85,8 @@ int hostif_complete_host_read(uint32_t id, const char* buf, size_t len)
     memcpy(&msg[8], buf, len);
 
     virtio_vsock_send(VSOCK_HOST_CID, VSOCK_HOST_PORT, msg, 2 + msg_len);
+
+    return 0;
 }
 
 int hostif_send_irq(uint16_t vector)
@@ -98,6 +101,23 @@ int hostif_send_irq(uint16_t vector)
     *(uint16_t*)&msg[4] = __builtin_bswap16(vector);
 
     virtio_vsock_send(VSOCK_HOST_CID, VSOCK_HOST_PORT, msg, 2 + msg_len);
+
+    return 0;
+}
+
+int hostif_send_ready(void)
+{
+    char msg[1024];
+    size_t msg_len = 2;
+
+    assert(msg_len + 2 <= sizeof(msg));
+
+    *(uint16_t*)&msg[0] = __builtin_bswap16(msg_len);
+    *(uint16_t*)&msg[2] = __builtin_bswap16((uint16_t)MT_READY);
+
+    virtio_vsock_send(VSOCK_HOST_CID, VSOCK_HOST_PORT, msg, 2 + msg_len);
+
+    return 0;
 }
 
 void hostif_init(unsigned int sectors_per_page)

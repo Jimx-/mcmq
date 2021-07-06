@@ -11,6 +11,7 @@ void hostif_init(unsigned int sectors_per_page);
 void hostif_init_cpu(void);
 int hostif_complete_host_read(uint32_t id, const char* buf, size_t len);
 int hostif_send_irq(uint16_t vector);
+int hostif_send_ready(void);
 
 /* hostif_nvme.c */
 void hostif_nvme_init(unsigned int sectors_per_page);

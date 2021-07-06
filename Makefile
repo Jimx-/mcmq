@@ -12,13 +12,16 @@ BUILD_PATH  = ./obj
 LIBSRCS		= lib/vsprintf.c lib/strlen.c lib/memcpy.c lib/memcmp.c lib/memchr.c lib/memmove.c \
 				lib/memset.c lib/strnlen.c lib/strrchr.c lib/strtoul.c lib/strchr.c lib/strcmp.c \
 				lib/assert.c lib/rand.c
-EXTSRCS		= $(patsubst %.c, libfdt/%.c, $(LIBFDT_SRCS))
+EXTSRCS		= $(patsubst %.c, libfdt/%.c, $(LIBFDT_SRCS)) \
+					protobuf-c/protobuf-c.c
+PROTOFILES      = proto/ssd_config.proto
+PROTOSRCS		= $(patsubst %.proto, %.pb-c.c, $(PROTOFILES))
 SRCS		= head.S trap.S main.c fdt.c proc.c sched.c vm.c global.c direct_tty.c memory.c \
 				exc.c syscall.c irq.c timer.c user.c gate.S alloc.c slab.c virtio.c blk.c \
 				pci.c smp.c virtio_mmio.c virtio_pci.c vsock.c ivshmem.c ringbuf.c \
 				ssd/ssd.c ssd/hostif.c ssd/hostif_nvme.c ssd/worker.c ssd/data_cache.c ssd/amu.c \
 				ssd/block_manager.c ssd/tsu.c ssd/nvm_ctlr.c \
-				$(LIBSRCS) $(EXTSRCS)
+				$(LIBSRCS) $(EXTSRCS) $(PROTOSRCS)
 OBJS		= $(patsubst %.c, $(BUILD_PATH)/%.o, $(patsubst %.S, $(BUILD_PATH)/%.o, $(patsubst %.asm, $(BUILD_PATH)/%.o, $(SRCS))))
 
 DEPS		= $(OBJS:.o=.d)
@@ -61,6 +64,9 @@ $(BUILD_PATH) :
 	mkdir $(BUILD_PATH)/lib
 	mkdir $(BUILD_PATH)/libfdt
 	mkdir $(BUILD_PATH)/ssd
+	mkdir $(BUILD_PATH)/proto
+	mkdir $(BUILD_PATH)/obj
+	mkdir $(BUILD_PATH)/protobuf-c
 
 -include $(DEPS)
 
@@ -69,3 +75,9 @@ $(BUILD_PATH)/%.o : $(SRC_PATH)/%.c
 
 $(BUILD_PATH)/%.o : $(SRC_PATH)/%.S
 	$(CC) $(CFLAGS) -MP -MMD -c -D__ASSEMBLY__ -o $@ $<
+
+%.pb-c.c: $(SRC_PATH)/%.proto
+	protoc --c_out=$(SRC_PATH) $<
+
+%.pb-c.h: $(SRC_PATH)/%.proto
+	protoc --c_out=$(SRC_PATH) $<

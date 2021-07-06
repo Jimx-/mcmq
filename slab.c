@@ -62,7 +62,7 @@ static struct slabdata* alloc_slabdata()
 void* slaballoc(size_t bytes)
 {
     if (bytes > MAXSIZE || bytes < MINSIZE) {
-        printk("mm: slaballoc: invalid size(%d bytes)\n", bytes);
+        /* printk("mm: slaballoc: invalid size(%d bytes)\n", bytes); */
         return NULL;
     }
 

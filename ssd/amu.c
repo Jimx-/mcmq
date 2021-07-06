@@ -384,7 +384,6 @@ static void assign_plane(struct flash_transaction* txn)
     struct flash_address* addr = &txn->addr;
     lpa_t lpa = txn->lpa;
 
-    lpa = 0;
 #define ASSIGN_PHYS_ADDR(lpa, name, num) \
     do {                                 \
         addr->name##_id = lpa % num;     \

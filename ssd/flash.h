@@ -59,9 +59,9 @@ struct flash_transaction {
 };
 
 enum flash_technology {
-    FT_SLC,
-    FT_MLC,
-    FT_TLC,
+    FT_SLC = 1,
+    FT_MLC = 2,
+    FT_TLC = 3,
 };
 
 struct flash_config {

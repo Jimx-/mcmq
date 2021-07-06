@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package mcmq;
+
+enum FlashTechnology {
+    FT_SLC = 0;
+    FT_MLC = 1;
+    FT_TLC = 2;
+}
+
+message FlashConfig {
+    FlashTechnology technology = 1;
+
+    uint64 page_read_latency_lsb = 2;
+    uint64 page_read_latency_csb = 3;
+    uint64 page_read_latency_msb = 4;
+    uint64 page_program_latency_lsb = 5;
+    uint64 page_program_latency_csb = 6;
+    uint64 page_program_latency_msb = 7;
+    uint64 block_erase_latency = 8;
+
+    uint32 nr_dies_per_chip = 9;
+    uint32 nr_planes_per_die = 10;
+    uint32 nr_blocks_per_plane = 11;
+    uint32 nr_pages_per_block = 12;
+    uint32 page_capacity = 13;
+}
+
+enum CacheMode {
+    CM_NO_CACHE = 0;
+    CM_WRITE_CACHE = 1;
+}
+
+enum BlockSelectionPolicy {
+    BSP_GREEDY = 0;
+}
+
+message SsdConfig {
+    FlashConfig flash_config = 1;
+    uint32 seed = 2;
+    CacheMode cache_mode = 3;
+    uint32 mapping_table_capacity = 4;
+    uint32 data_cache_capacity = 5;
+    uint32 gc_threshold = 6;
+    uint32 gc_hard_threshold = 7;
+    BlockSelectionPolicy block_selection_policy = 8;
+    uint32 channel_count = 9;
+    uint32 nr_chips_per_channel = 10;
+    uint32 channel_transfer_rate = 11;
+    uint32 channel_width = 12;
+}

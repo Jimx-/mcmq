@@ -28,12 +28,12 @@ struct user_request {
 };
 
 enum cache_mode {
-    CM_NO_CACHE,
+    CM_NO_CACHE = 1,
     CM_WRITE_CACHE,
 };
 
 enum block_selection_policy {
-    BSP_GREEDY,
+    BSP_GREEDY = 1,
     BSP_RAND_GREEDY,
     BSP_RANDOM,
     BSP_RANDOM_P,
@@ -57,8 +57,9 @@ struct ssd_config {
 };
 
 /* ssd.c */
-void ssd_init(struct ssd_config* config);
+void ssd_init(void);
 void ssd_init_config_default(struct ssd_config* config);
+void ssd_dump_config(struct ssd_config* config);
 
 /* worker.c */
 void init_ssd_worker(void);
