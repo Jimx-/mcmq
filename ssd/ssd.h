@@ -21,8 +21,10 @@ struct user_request {
     int do_write;
     uint16_t command_id;
     uint16_t qid;
+    unsigned int nsid;
     lha_t start_lba;
     unsigned int sector_count;
+    unsigned int status;
 
     struct list_head txn_list;
 };
@@ -53,6 +55,17 @@ struct ssd_config {
     unsigned int nr_chips_per_channel;
     unsigned int channel_transfer_rate;
     unsigned int channel_width;
+
+    unsigned int namespace_count;
+    unsigned int** channel_ids;
+    unsigned int* channel_id_count;
+    unsigned int** chip_ids;
+    unsigned int* chip_id_count;
+    unsigned int** die_ids;
+    unsigned int* die_id_count;
+    unsigned int** plane_ids;
+    unsigned int* plane_id_count;
+
     struct flash_config flash_config;
 };
 
@@ -72,7 +85,8 @@ int submit_transaction(struct flash_transaction* txn);
 int notify_transaction_complete(struct flash_transaction* txn);
 
 /* data_cache.c */
-void dc_init(enum cache_mode mode, size_t capacity_pages);
+void dc_init(enum cache_mode mode, size_t capacity_pages,
+             unsigned int nr_namespaces);
 void dc_handle_user_request(struct user_request* req);
 void dc_transaction_complete(struct flash_transaction* txn);
 
@@ -80,22 +94,28 @@ void dc_transaction_complete(struct flash_transaction* txn);
 void amu_init(size_t mt_capacity, unsigned int nr_channels,
               unsigned int nr_chips_per_channel, unsigned int nr_dies_per_chip,
               unsigned int nr_planes_per_die, unsigned int nr_blocks_per_plane,
-              unsigned int nr_pages_per_block, unsigned int sectors_in_page);
+              unsigned int nr_pages_per_block, unsigned int sectors_in_page,
+              unsigned int namespace_count, unsigned int** channel_ids,
+              unsigned int* channel_id_count, unsigned int** chip_ids,
+              unsigned int* chip_id_count, unsigned int** die_ids,
+              unsigned int* die_id_count, unsigned int** plane_ids,
+              unsigned int* plane_id_count);
 void amu_dispatch(struct user_request* req);
 void amu_transaction_complete(struct flash_transaction* txn);
 ppa_t address_to_ppa(struct flash_address* addr);
 void amu_alloc_page_gc(struct flash_transaction* txn, int is_mapping);
-void amu_lock_lpa(lpa_t lpa, int is_mapping);
-void amu_unlock_lpa(lpa_t lpa, int is_mapping);
+void amu_lock_lpa(unsigned int nsid, lpa_t lpa, int is_mapping);
+void amu_unlock_lpa(unsigned int nsid, lpa_t lpa, int is_mapping);
 
 /* block_manager.c */
 void bm_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
              unsigned int nr_dies_per_chip, unsigned int nr_planes_per_die,
              unsigned int nr_blocks_per_plane, unsigned int nr_pages_per_block,
-             unsigned int sectors_in_page,
+             unsigned int sectors_in_page, unsigned int nr_namespaces,
              enum block_selection_policy block_selection_policy,
              unsigned int gc_threshold, unsigned int gc_hard_threshold);
-void bm_alloc_page(struct flash_address* addr, int for_gc, int for_mapping);
+void bm_alloc_page(unsigned int nsid, struct flash_address* addr, int for_gc,
+                   int for_mapping);
 void bm_invalidate_page(struct flash_address* addr);
 void bm_read_issued(struct flash_address* addr);
 void bm_read_completed(struct flash_address* addr);

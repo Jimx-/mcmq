@@ -45,6 +45,7 @@ struct flash_transaction {
     enum txn_source source;
     int worker;
 
+    unsigned int nsid;
     lpa_t lpa;
     ppa_t ppa;
     struct flash_address addr;

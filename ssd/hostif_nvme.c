@@ -197,6 +197,7 @@ static void segment_user_request(struct user_request* req, int worker)
         txn->type = req->do_write ? TXN_WRITE : TXN_READ;
         txn->source = TS_USER_IO;
         txn->worker = worker;
+        txn->nsid = req->nsid;
         txn->lpa = lpa;
         txn->ppa = NO_PPA;
         txn->length = txn_size << SECTOR_SHIFT;
@@ -216,9 +217,15 @@ static void process_io_command(struct nvme_queue* nvmeq,
     SLABALLOC(req);
     memset(req, 0, sizeof(*req));
 
+    if (cmd->rw.nsid == 0) {
+        req->status = NVME_SC_INVALID_NS;
+        nvme_complete_request(req);
+    }
+
     req->do_write = cmd->rw.opcode == nvme_cmd_write;
     req->command_id = cmd->rw.command_id;
     req->qid = nvmeq->qid;
+    req->nsid = cmd->rw.nsid;
     req->start_lba = cmd->rw.slba;
     req->sector_count = cmd->rw.length + 1;
     INIT_LIST_HEAD(&req->txn_list);
@@ -365,7 +372,7 @@ void nvme_complete_request(struct user_request* req)
     struct nvme_queue* nvmeq;
 
     nvmeq = &nvme_queues[req->qid];
-    post_cqe(nvmeq, 0, req->command_id, NULL);
+    post_cqe(nvmeq, req->status, req->command_id, NULL);
     release_user_request(req);
 
     hostif_send_irq(nvmeq->cq_vector);

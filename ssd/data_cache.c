@@ -33,12 +33,14 @@ struct data_cache {
     spinlock_t lock;
 };
 
-static struct data_cache g_cache;
+static unsigned int namespace_count;
+static struct data_cache* caches;
 
 static inline struct data_cache*
 get_cache_for_txn(struct flash_transaction* txn)
 {
-    return &g_cache;
+    assert(txn->nsid > 0 && txn->nsid <= namespace_count);
+    return &caches[txn->nsid - 1];
 }
 
 static inline int is_user_request_complete(struct user_request* req)
@@ -304,8 +306,19 @@ void dc_transaction_complete(struct flash_transaction* txn)
     }
 }
 
-void dc_init(enum cache_mode mode, size_t capacity_pages)
+void dc_init(enum cache_mode mode, size_t capacity_pages,
+             unsigned int nr_namespaces)
 {
+    int i;
+    size_t alloc_size;
+
     cache_mode = mode;
-    cache_init(&g_cache, capacity_pages);
+    namespace_count = nr_namespaces;
+
+    alloc_size = namespace_count * sizeof(struct data_cache);
+    alloc_size = roundup(alloc_size, PG_SIZE);
+    caches = (struct data_cache*)vmalloc_pages(alloc_size >> PG_SHIFT, NULL);
+
+    for (i = 0; i < namespace_count; i++)
+        cache_init(&caches[i], capacity_pages / namespace_count);
 }

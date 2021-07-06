@@ -74,6 +74,7 @@ struct gmt_entry {
 };
 
 struct am_domain {
+    unsigned int nsid;
     struct mapping_table table;
     struct gtd_entry* gtd;
     struct gmt_entry* gmt;
@@ -91,7 +92,7 @@ struct am_domain {
     struct list_head locked_mapping_txns;
 };
 
-static struct am_domain g_domain;
+static struct am_domain* domains;
 
 static unsigned int channel_count, chips_per_channel, dies_per_chip,
     planes_per_die, blocks_per_plane, pages_per_block;
@@ -99,9 +100,20 @@ static unsigned int pages_per_plane, pages_per_die, pages_per_chip,
     pages_per_channel;
 static unsigned int sectors_per_page;
 
+static unsigned int namespace_count;
+static unsigned int** channel_ids;
+static unsigned int* channel_id_count;
+static unsigned int** chip_ids;
+static unsigned int* chip_id_count;
+static unsigned int** die_ids;
+static unsigned int* die_id_count;
+static unsigned int** plane_ids;
+static unsigned int* plane_id_count;
+
 static inline struct am_domain* domain_get(struct flash_transaction* txn)
 {
-    return &g_domain;
+    assert(txn->nsid > 0 && txn->nsid <= namespace_count);
+    return &domains[txn->nsid - 1];
 }
 
 static inline lpa_t get_mvpn(struct am_domain* domain, lpa_t lpa)
@@ -380,20 +392,30 @@ queue_locked_mapping_transaction(struct am_domain* domain,
 
 static void assign_plane(struct flash_transaction* txn)
 {
-    /* struct am_domain* domain = domain_get(txn); */
     struct flash_address* addr = &txn->addr;
     lpa_t lpa = txn->lpa;
+    int nsid = txn->nsid - 1;
+    unsigned int* channel_id = channel_ids[nsid];
+    unsigned int* chip_id = chip_ids[nsid];
+    unsigned int* die_id = die_ids[nsid];
+    unsigned int* plane_id = plane_ids[nsid];
+    unsigned int channel_count = channel_id_count[nsid];
+    unsigned int chip_count = chip_id_count[nsid];
+    unsigned int die_count = die_id_count[nsid];
+    unsigned int plane_count = plane_id_count[nsid];
 
-#define ASSIGN_PHYS_ADDR(lpa, name, num) \
-    do {                                 \
-        addr->name##_id = lpa % num;     \
-        lpa = lpa / num;                 \
+    assert(txn->nsid > 0 && txn->nsid <= namespace_count);
+
+#define ASSIGN_PHYS_ADDR(lpa, name)                      \
+    do {                                                 \
+        addr->name##_id = name##_id[lpa % name##_count]; \
+        lpa = lpa / name##_count;                        \
     } while (0)
 
-    ASSIGN_PHYS_ADDR(lpa, channel, channel_count);
-    ASSIGN_PHYS_ADDR(lpa, chip, chips_per_channel);
-    ASSIGN_PHYS_ADDR(lpa, die, dies_per_chip);
-    ASSIGN_PHYS_ADDR(lpa, plane, planes_per_die);
+    ASSIGN_PHYS_ADDR(lpa, channel);
+    ASSIGN_PHYS_ADDR(lpa, chip);
+    ASSIGN_PHYS_ADDR(lpa, die);
+    ASSIGN_PHYS_ADDR(lpa, plane);
 #undef ASSIGN_PHYS_ADDR
 }
 
@@ -426,6 +448,7 @@ static void alloc_page_for_write(struct flash_transaction* txn, int for_gc)
                 read_tx->type = TXN_READ;
                 read_tx->source = txn->source;
                 read_tx->worker = txn->worker;
+                read_tx->nsid = txn->nsid;
                 read_tx->lpa = txn->lpa;
                 read_tx->ppa = entry->ppa;
                 read_tx->length = count << SECTOR_SHIFT;
@@ -444,7 +467,7 @@ static void alloc_page_for_write(struct flash_transaction* txn, int for_gc)
         bm_invalidate_page(&addr);
     }
 
-    bm_alloc_page(&txn->addr, for_gc, FALSE);
+    bm_alloc_page(txn->nsid, &txn->addr, for_gc, FALSE);
     txn->ppa = address_to_ppa(&txn->addr);
     mt_update_mapping(&domain->table, txn->lpa, txn->ppa, txn->bitmap, FALSE,
                       FALSE);
@@ -463,7 +486,7 @@ static void alloc_page_for_mapping(struct flash_transaction* txn, lpa_t mvpn,
         bm_invalidate_page(&addr);
     }
 
-    bm_alloc_page(&txn->addr, for_gc, TRUE);
+    bm_alloc_page(txn->nsid, &txn->addr, for_gc, TRUE);
     txn->ppa = address_to_ppa(&txn->addr);
     gtd->mppn = txn->ppa;
     gtd->timestamp = current_time_ns();
@@ -500,6 +523,7 @@ static void submit_mapping_read(struct am_domain* domain, lpa_t lpa)
     read_tx->type = TXN_READ;
     read_tx->source = TS_MAPPING;
     read_tx->worker = worker_self();
+    read_tx->nsid = domain->nsid;
     read_tx->lpa = mvpn;
     read_tx->ppa = mppn;
     read_tx->length = sectors_per_page << SECTOR_SHIFT;
@@ -561,6 +585,7 @@ static void submit_mapping_writeback(struct am_domain* domain, lpa_t lpa)
     write_tx->type = TXN_WRITE;
     write_tx->source = TS_MAPPING;
     write_tx->worker = worker_self();
+    write_tx->nsid = domain->nsid;
     write_tx->lpa = mvpn;
     write_tx->ppa = NO_PPA;
     write_tx->length = sectors_per_page << SECTOR_SHIFT;
@@ -582,6 +607,7 @@ static void submit_mapping_writeback(struct am_domain* domain, lpa_t lpa)
         read_tx->type = TXN_READ;
         read_tx->source = TS_MAPPING;
         read_tx->worker = worker_self();
+        read_tx->nsid = domain->nsid;
         read_tx->lpa = mvpn;
         read_tx->ppa = mppn;
         read_tx->length = read_size;
@@ -750,8 +776,8 @@ static void translate_transaction(struct flash_transaction* txn)
     spin_unlock(&domain->lock);
 }
 
-static void domain_init(struct am_domain* domain, size_t capacity,
-                        unsigned int gtd_entry_size,
+static void domain_init(struct am_domain* domain, unsigned int nsid,
+                        size_t capacity, unsigned int gtd_entry_size,
                         size_t translation_entries_per_page,
                         lha_t total_logical_sectors)
 {
@@ -762,6 +788,10 @@ static void domain_init(struct am_domain* domain, size_t capacity,
     size_t alloc_size;
     void* buf;
     int i;
+
+    memset(domain, 0, sizeof(*domain));
+
+    domain->nsid = nsid;
 
     mt_init(&domain->table, capacity);
     spin_lock_init(&domain->lock);
@@ -801,8 +831,16 @@ static void domain_init(struct am_domain* domain, size_t capacity,
 void amu_init(size_t mt_capacity, unsigned int nr_channels,
               unsigned int nr_chips_per_channel, unsigned int nr_dies_per_chip,
               unsigned int nr_planes_per_die, unsigned int nr_blocks_per_plane,
-              unsigned int nr_pages_per_block, unsigned int sectors_in_page)
+              unsigned int nr_pages_per_block, unsigned int sectors_in_page,
+              unsigned int nr_namespaces, unsigned int** channel_id_list,
+              unsigned int* nr_channel_ids, unsigned int** chip_id_list,
+              unsigned int* nr_chip_ids, unsigned int** die_id_list,
+              unsigned int* nr_die_ids, unsigned int** plane_id_list,
+              unsigned int* nr_plane_ids)
 {
+    int i;
+    size_t alloc_size;
+
     channel_count = nr_channels;
     chips_per_channel = nr_chips_per_channel;
     dies_per_chip = nr_dies_per_chip;
@@ -817,9 +855,24 @@ void amu_init(size_t mt_capacity, unsigned int nr_channels,
 
     sectors_per_page = sectors_in_page;
 
-    domain_init(&g_domain, mt_capacity, 4,
-                (sectors_per_page * SECTOR_SIZE) >> 2,
-                pages_per_channel * sectors_per_page);
+    namespace_count = nr_namespaces;
+    channel_ids = channel_id_list;
+    channel_id_count = nr_channel_ids;
+    chip_ids = chip_id_list;
+    chip_id_count = nr_chip_ids;
+    die_ids = die_id_list;
+    die_id_count = nr_die_ids;
+    plane_ids = plane_id_list;
+    plane_id_count = nr_plane_ids;
+
+    alloc_size = namespace_count * sizeof(struct am_domain);
+    alloc_size = roundup(alloc_size, PG_SIZE);
+    domains = (struct am_domain*)vmalloc_pages(alloc_size >> PG_SHIFT, NULL);
+
+    for (i = 0; i < namespace_count; i++)
+        domain_init(&domains[i], i + 1, mt_capacity, 4,
+                    (sectors_per_page * SECTOR_SIZE) >> 2,
+                    pages_per_channel * sectors_per_page);
 }
 
 void amu_dispatch(struct user_request* req)
@@ -917,9 +970,10 @@ void amu_transaction_complete(struct flash_transaction* txn)
     }
 }
 
-void amu_lock_lpa(lpa_t lpa, int is_mapping)
+void amu_lock_lpa(unsigned int nsid, lpa_t lpa, int is_mapping)
 {
-    struct am_domain* domain = &g_domain;
+    assert(nsid > 0 && nsid <= namespace_count);
+    struct am_domain* domain = &domains[nsid - 1];
     struct lock_table* table;
     struct lock_entry* entry;
 
@@ -967,9 +1021,10 @@ static void restart_locked_mapping_transactions(struct am_domain* domain,
     }
 }
 
-void amu_unlock_lpa(lpa_t lpa, int is_mapping)
+void amu_unlock_lpa(unsigned int nsid, lpa_t lpa, int is_mapping)
 {
-    struct am_domain* domain = &g_domain;
+    assert(nsid > 0 && nsid <= namespace_count);
+    struct am_domain* domain = &domains[nsid - 1];
     struct lock_table* table;
     struct lock_entry* entry;
 

@@ -60,6 +60,66 @@ void ssd_init_config_default(struct ssd_config* config)
     config->channel_width = 1;
 }
 
+static void init_namespaces_from_pb(struct ssd_config* config,
+                                    Mcmq__SsdConfig* pb_config)
+{
+    int i, j;
+    size_t ns_count;
+    size_t alloc_size, count = 0;
+    void* buf;
+
+    ns_count = pb_config->n_namespaces;
+    config->namespace_count = ns_count;
+
+    for (i = 0; i < ns_count; i++) {
+        Mcmq__Namespace* ns = pb_config->namespaces[i];
+        count += ns->n_channel_ids + ns->n_chip_ids + ns->n_die_ids +
+                 ns->n_plane_ids;
+    }
+
+    alloc_size =
+        ns_count * 4 * (sizeof(unsigned int**) + sizeof(unsigned int)) +
+        count * sizeof(unsigned int);
+    alloc_size = roundup(alloc_size, PG_SIZE);
+
+    buf = vmalloc_pages(alloc_size >> PG_SHIFT, NULL);
+    assert(buf);
+
+#define INIT_ARRAY(name)                              \
+    do {                                              \
+        config->name##_ids = (unsigned int**)buf;     \
+        buf += sizeof(unsigned int*) * ns_count;      \
+        config->name##_id_count = (unsigned int*)buf; \
+        buf += sizeof(unsigned int) * ns_count;       \
+    } while (0)
+
+    INIT_ARRAY(channel);
+    INIT_ARRAY(chip);
+    INIT_ARRAY(die);
+    INIT_ARRAY(plane);
+#undef INIT_ARRAY
+
+    for (i = 0; i < ns_count; i++) {
+        Mcmq__Namespace* ns = pb_config->namespaces[i];
+
+#define INIT_IDS(name)                                    \
+    do {                                                  \
+        config->name##_ids[i] = buf;                      \
+        buf += ns->n_##name##_ids * sizeof(unsigned int); \
+        for (j = 0; j < ns->n_##name##_ids; j++) {        \
+            config->name##_ids[i][j] = ns->name##_ids[j]; \
+        }                                                 \
+        config->name##_id_count[i] = ns->n_##name##_ids;  \
+    } while (0)
+
+        INIT_IDS(channel);
+        INIT_IDS(chip);
+        INIT_IDS(die);
+        INIT_IDS(plane);
+#undef INIT_IDS
+    }
+}
+
 static void init_config_from_pb(struct ssd_config* config,
                                 Mcmq__SsdConfig* pb_config)
 {
@@ -125,6 +185,8 @@ static void init_config_from_pb(struct ssd_config* config,
     config->nr_chips_per_channel = pb_config->nr_chips_per_channel;
     config->channel_transfer_rate = pb_config->channel_transfer_rate;
     config->channel_width = pb_config->channel_width;
+
+    init_namespaces_from_pb(config, pb_config);
 }
 
 static void ssd_init_config(struct ssd_config* config)
@@ -167,7 +229,8 @@ static void ssd_init_config(struct ssd_config* config)
     }
 
     dc_init(config->cache_mode,
-            config->data_cache_capacity / config->flash_config.page_capacity);
+            config->data_cache_capacity / config->flash_config.page_capacity,
+            config->namespace_count);
 
     bm_init(config->channel_count, config->nr_chips_per_channel,
             config->flash_config.nr_dies_per_chip,
@@ -175,16 +238,19 @@ static void ssd_init_config(struct ssd_config* config)
             config->flash_config.nr_blocks_per_plane,
             config->flash_config.nr_pages_per_block,
             config->flash_config.page_capacity >> SECTOR_SHIFT,
-            config->block_selection_policy, config->gc_threshold,
-            config->gc_hard_threshold);
+            config->namespace_count, config->block_selection_policy,
+            config->gc_threshold, config->gc_hard_threshold);
 
-    amu_init(config->mapping_table_capacity, config->channel_count,
-             config->nr_chips_per_channel,
-             config->flash_config.nr_dies_per_chip,
-             config->flash_config.nr_planes_per_die,
-             config->flash_config.nr_blocks_per_plane,
-             config->flash_config.nr_pages_per_block,
-             config->flash_config.page_capacity >> SECTOR_SHIFT);
+    amu_init(
+        config->mapping_table_capacity, config->channel_count,
+        config->nr_chips_per_channel, config->flash_config.nr_dies_per_chip,
+        config->flash_config.nr_planes_per_die,
+        config->flash_config.nr_blocks_per_plane,
+        config->flash_config.nr_pages_per_block,
+        config->flash_config.page_capacity >> SECTOR_SHIFT,
+        config->namespace_count, config->channel_ids, config->channel_id_count,
+        config->chip_ids, config->chip_id_count, config->die_ids,
+        config->die_id_count, config->plane_ids, config->plane_id_count);
 
     tsu_init(config->channel_count, config->nr_chips_per_channel,
              config->flash_config.nr_dies_per_chip,
@@ -223,6 +289,33 @@ void ssd_timer_interrupt(void)
     if (self == THREAD_TSU) nvm_ctlr_timer_interrupt();
 }
 
+static void ssd_dump_namespaces(struct ssd_config* config)
+{
+    int i, j;
+    printk("Namespaces:\r\n");
+
+    for (i = 0; i < config->namespace_count; i++) {
+        printk("  %d:\r\n", i);
+#define PRINT_IDS(name)                                              \
+    do {                                                             \
+        for (j = 0; j < config->name##_id_count[i]; j++) {           \
+            printk("%s%d", j ? ", " : "", config->name##_ids[i][j]); \
+        }                                                            \
+        printk("\r\n");                                              \
+    } while (0)
+
+        printk("    Channels: ");
+        PRINT_IDS(channel);
+        printk("    Chips: ");
+        PRINT_IDS(chip);
+        printk("    Dies: ");
+        PRINT_IDS(die);
+        printk("    Planes: ");
+        PRINT_IDS(plane);
+#undef PRINT_IDS
+    }
+}
+
 void ssd_dump_config(struct ssd_config* config)
 {
     printk("==============================\r\n");
@@ -256,6 +349,8 @@ void ssd_dump_config(struct ssd_config* config)
     printk("#Chips per channel: %d\r\n", config->nr_chips_per_channel);
     printk("Channel transfer rate: %d\r\n", config->channel_transfer_rate);
     printk("Channel width: %d\r\n", config->channel_width);
+
+    ssd_dump_namespaces(config);
 
     printk("Flash config:\r\n");
 

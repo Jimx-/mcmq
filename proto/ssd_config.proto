@@ -35,6 +35,13 @@ enum BlockSelectionPolicy {
     BSP_GREEDY = 0;
 }
 
+message Namespace {
+    repeated uint32 channel_ids = 1;
+    repeated uint32 chip_ids = 2;
+    repeated uint32 die_ids = 3;
+    repeated uint32 plane_ids = 4;
+}
+
 message SsdConfig {
     FlashConfig flash_config = 1;
     uint32 seed = 2;
@@ -48,4 +55,5 @@ message SsdConfig {
     uint32 nr_chips_per_channel = 10;
     uint32 channel_transfer_rate = 11;
     uint32 channel_width = 12;
+    repeated Namespace namespaces = 13;
 }

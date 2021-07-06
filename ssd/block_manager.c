@@ -23,6 +23,7 @@ struct block_data {
     unsigned int nr_ongoing_reads;
     unsigned int nr_ongoing_programs;
     int has_ongoing_gc;
+    unsigned int nsid;
     int has_mapping;
     struct flash_transaction* erase_txn;
     bitchunk_t invalidate_page_bitmap[0];
@@ -32,9 +33,9 @@ struct plane_allocator {
     struct block_data* blocks;
     struct list_head free_list;
     unsigned int free_list_size;
-    struct block_data* data_wf;
-    struct block_data* gc_wf;
-    struct block_data* mapping_wf;
+    struct block_data** data_wf;
+    struct block_data** gc_wf;
+    struct block_data** mapping_wf;
     spinlock_t lock;
 };
 
@@ -43,6 +44,7 @@ static struct plane_allocator**** planes;
 static unsigned int channel_count, chips_per_channel, dies_per_chip,
     planes_per_die, blocks_per_plane, pages_per_block;
 static unsigned int sectors_per_page;
+static unsigned int namespace_count;
 static unsigned int block_pool_gc_threshold, block_pool_gc_hard_threshold;
 static size_t block_data_alloc_size;
 static enum block_selection_policy gc_block_selection_policy;
@@ -82,7 +84,7 @@ GEN_NOTIFY_FUNC(program, issued, ++)
 GEN_NOTIFY_FUNC(program, completed, --)
 
 static struct block_data* get_free_block(struct plane_allocator* plane,
-                                         int for_mapping)
+                                         unsigned int nsid, int for_mapping)
 {
     struct block_data* block;
 
@@ -91,6 +93,7 @@ static struct block_data* get_free_block(struct plane_allocator* plane,
     block = list_entry(plane->free_list.next, struct block_data, list);
     list_del(&block->list);
     plane->free_list_size--;
+    block->nsid = nsid;
     block->has_mapping = for_mapping;
 
     return block;
@@ -99,6 +102,7 @@ static struct block_data* get_free_block(struct plane_allocator* plane,
 static void erase_block(struct block_data* block)
 {
     block->page_write_index = 0;
+    block->nsid = -1;
     block->has_mapping = FALSE;
     memset(block->invalidate_page_bitmap, 0,
            BITCHUNKS(pages_per_block) * sizeof(bitchunk_t));
@@ -121,9 +125,11 @@ static void init_plane(struct plane_allocator* plane)
         plane->free_list_size++;
     }
 
-    plane->data_wf = get_free_block(plane, FALSE);
-    plane->gc_wf = get_free_block(plane, FALSE);
-    plane->mapping_wf = get_free_block(plane, TRUE);
+    for (i = 0; i < namespace_count; i++) {
+        plane->data_wf[i] = get_free_block(plane, i + 1, FALSE);
+        plane->gc_wf[i] = get_free_block(plane, i + 1, FALSE);
+        plane->mapping_wf[i] = get_free_block(plane, i + 1, TRUE);
+    }
 
     spin_lock_init(&plane->lock);
 }
@@ -134,6 +140,7 @@ static void alloc_planes(void)
     void* buf;
     void** cur_ptr;
     struct plane_allocator* cur_plane;
+    struct block_data** cur_wf;
     struct block_data* cur_block;
     int i, j, k, l;
 
@@ -147,6 +154,7 @@ static void alloc_planes(void)
 
     alloc_size = nr_ptrs * sizeof(void*) +
                  nr_planes * sizeof(struct plane_allocator) +
+                 nr_planes * 3 * sizeof(struct block_data*) * namespace_count +
                  nr_blocks * block_data_alloc_size;
     alloc_size = roundup(alloc_size, PG_SIZE);
 
@@ -155,9 +163,13 @@ static void alloc_planes(void)
 
     cur_ptr = (void**)buf;
     cur_plane = (struct plane_allocator*)(buf + nr_ptrs * sizeof(void*));
+    cur_wf = (struct block_data**)(buf + nr_ptrs * sizeof(void*) +
+                                   nr_planes * sizeof(struct plane_allocator));
     cur_block =
         (struct block_data*)(buf + nr_ptrs * sizeof(void*) +
-                             nr_planes * sizeof(struct plane_allocator));
+                             nr_planes * sizeof(struct plane_allocator) +
+                             nr_planes * 3 * sizeof(struct block_data*) *
+                                 namespace_count);
 
     planes = (struct plane_allocator****)cur_ptr;
     cur_ptr += channel_count;
@@ -175,10 +187,17 @@ static void alloc_planes(void)
                 cur_plane += planes_per_die;
 
                 for (l = 0; l < planes_per_die; l++) {
-                    memset(&planes[i][j][k][l], 0,
-                           sizeof(struct plane_allocator));
+                    struct plane_allocator* plane = &planes[i][j][k][l];
+                    memset(plane, 0, sizeof(struct plane_allocator));
 
-                    planes[i][j][k][l].blocks = cur_block;
+                    plane->blocks = cur_block;
+                    plane->data_wf = cur_wf;
+                    cur_wf += namespace_count;
+                    plane->gc_wf = cur_wf;
+                    cur_wf += namespace_count;
+                    plane->mapping_wf = cur_wf;
+                    cur_wf += namespace_count;
+
                     cur_block = (struct block_data*)((uintptr_t)cur_block +
                                                      block_data_alloc_size *
                                                          blocks_per_plane);
@@ -193,9 +212,13 @@ static void alloc_planes(void)
 static int is_block_safe_for_gc(struct plane_allocator* plane,
                                 unsigned int block_id)
 {
+    int i;
     struct block_data* block = get_block_data(plane, block_id);
 
-    if (block == plane->data_wf || block == plane->gc_wf) return FALSE;
+    for (i = 0; i < namespace_count; i++)
+        if (block == plane->data_wf[i] || block == plane->gc_wf[i] ||
+            block == plane->mapping_wf[i])
+            return FALSE;
 
     if (block->nr_ongoing_programs) return FALSE;
 
@@ -226,7 +249,7 @@ static void lock_block_pages(struct block_data* block,
             nvm_ctlr_get_metadata(&page_addr, &metadata);
             lpa = metadata.lpa;
 
-            amu_lock_lpa(lpa, block->has_mapping);
+            amu_lock_lpa(block->nsid, lpa, block->has_mapping);
         }
     }
 }
@@ -276,29 +299,33 @@ void gc_check(unsigned free_block_pool_size, struct flash_address* addr)
     }
 }
 
-void bm_alloc_page(struct flash_address* addr, int for_gc, int for_mapping)
+void bm_alloc_page(unsigned int nsid, struct flash_address* addr, int for_gc,
+                   int for_mapping)
 {
     struct plane_allocator* plane =
         &planes[addr->channel_id][addr->chip_id][addr->die_id][addr->plane_id];
     struct block_data* block;
 
+    assert(nsid > 0 && nsid <= namespace_count);
+
     spin_lock(&plane->lock);
 
-    block = for_mapping ? plane->mapping_wf
-                        : (for_gc ? plane->gc_wf : plane->data_wf);
+    block = for_mapping
+                ? plane->mapping_wf[nsid - 1]
+                : (for_gc ? plane->gc_wf[nsid - 1] : plane->data_wf[nsid - 1]);
     addr->block_id = block->block_id;
     addr->page_id = block->page_write_index++;
     bm_program_issued_locked(addr);
 
     if (block->page_write_index == pages_per_block) {
-        block = get_free_block(plane, for_mapping);
+        block = get_free_block(plane, nsid, for_mapping);
 
         if (for_mapping)
-            plane->mapping_wf = block;
+            plane->mapping_wf[nsid - 1] = block;
         else if (for_gc)
-            plane->gc_wf = block;
+            plane->gc_wf[nsid - 1] = block;
         else
-            plane->data_wf = block;
+            plane->data_wf[nsid - 1] = block;
 
         if (!for_gc) gc_check(plane->free_list_size, addr);
     }
@@ -323,7 +350,7 @@ void bm_invalidate_page(struct flash_address* addr)
 void bm_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
              unsigned int nr_dies_per_chip, unsigned int nr_planes_per_die,
              unsigned int nr_blocks_per_plane, unsigned int nr_pages_per_block,
-             unsigned int sectors_in_page,
+             unsigned int sectors_in_page, unsigned int nr_namespaces,
              enum block_selection_policy block_selection_policy,
              unsigned int gc_threshold, unsigned int gc_hard_threshold)
 {
@@ -334,6 +361,7 @@ void bm_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
     blocks_per_plane = nr_blocks_per_plane;
     pages_per_block = nr_pages_per_block;
     sectors_per_page = sectors_in_page;
+    namespace_count = nr_namespaces;
 
     block_data_alloc_size = sizeof(struct block_data) +
                             sizeof(bitchunk_t) * BITCHUNKS(pages_per_block);
@@ -364,6 +392,7 @@ static void submit_gc_transactions(struct block_data* block,
     erase_tx->type = TXN_ERASE;
     erase_tx->source = TS_GC;
     erase_tx->worker = worker_self();
+    erase_tx->nsid = block->nsid;
     erase_tx->lpa = NO_LPA;
     erase_tx->ppa = NO_PPA;
     erase_tx->length = 0;
@@ -386,6 +415,7 @@ static void submit_gc_transactions(struct block_data* block,
                 read_tx->type = TXN_READ;
                 read_tx->source = TS_GC;
                 read_tx->worker = worker_self();
+                read_tx->nsid = block->nsid;
                 read_tx->lpa = NO_LPA;
                 read_tx->ppa = address_to_ppa(addr);
                 read_tx->length = sectors_per_page << SECTOR_SHIFT;
@@ -395,6 +425,7 @@ static void submit_gc_transactions(struct block_data* block,
                 write_tx->type = TXN_WRITE;
                 write_tx->source = TS_GC;
                 write_tx->worker = worker_self();
+                write_tx->nsid = block->nsid;
                 write_tx->lpa = NO_LPA;
                 write_tx->ppa = address_to_ppa(addr);
                 write_tx->length = sectors_per_page << SECTOR_SHIFT;
@@ -468,7 +499,7 @@ static void bm_handle_gc_transaction(struct flash_transaction* txn)
         break;
 
     case TXN_WRITE:
-        amu_unlock_lpa(txn->lpa, txn->opaque != NULL);
+        amu_unlock_lpa(txn->nsid, txn->lpa, txn->opaque != NULL);
 
         list_del(&txn->list);
 
