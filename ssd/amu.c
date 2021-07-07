@@ -434,11 +434,9 @@ static void alloc_page_for_write(struct flash_transaction* txn, int for_gc)
                 /* Update read required. */
                 struct flash_transaction* read_tx;
                 page_bitmap_t read_bitmap = bitmap ^ entry->bitmap;
-                int i, count = 0;
+                int count;
 
-                for (i = 0; i < 64; i++) {
-                    if (read_bitmap & (1UL << i)) count++;
-                }
+                count = __builtin_popcountl(read_bitmap);
 
                 SLABALLOC(read_tx);
                 assert(read_tx);

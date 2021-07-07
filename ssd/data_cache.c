@@ -180,11 +180,7 @@ static void handle_cached_read(struct user_request* req)
             list_del(&txn->list);
             SLABFREE(txn);
         } else if (avail_sectors != 0) {
-            int i, count = 0;
-
-            for (i = 0; i < 64; i++) {
-                if (avail_sectors & (1 << i)) count++;
-            }
+            int count = __builtin_popcountl(avail_sectors);
 
             txn->bitmap &= ~avail_sectors;
             txn->length -= count << SECTOR_SHIFT;
@@ -221,10 +217,7 @@ void write_to_buffers(struct user_request* req)
                     if (entry->status == CES_DIRTY) {
                         struct flash_transaction* wb_txn;
 
-                        int i, count = 0;
-                        for (i = 0; i < 64; i++) {
-                            if (entry->bitmap & (1 << i)) count++;
-                        }
+                        int count = __builtin_popcountl(entry->bitmap);
 
                         SLABALLOC(wb_txn);
 

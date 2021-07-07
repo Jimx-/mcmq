@@ -1,8 +1,8 @@
 AS	= riscv64-unknown-elf-as
 CC	= riscv64-unknown-elf-gcc
 LD	= riscv64-unknown-elf-ld
-CFLAGS = -fno-builtin -fno-stack-protector -Wall -mcmodel=medany -mabi=lp64 -march=rv64imac -g -Ilibfdt
-LDFLAGS = -melf64lriscv -T riscvos.lds -Map System.map
+CFLAGS = -fno-builtin -fno-stack-protector -Wall -mcmodel=medany -mabi=lp64d -march=rv64imadc -g -Ilibfdt
+LDFLAGS = -nostdlib -Wl,-melf64lriscv,-T,riscvos.lds,-Map,System.map
 LDFLAGS_USER = -melf64lriscv -nostdlib
 
 include libfdt/Makefile.libfdt
@@ -57,7 +57,8 @@ realclean :
 	rm $(KERNEL) $(OBJS)
 
 $(KERNEL) : $(OBJS)
-	$(LD) $(LDFLAGS) -o $(KERNEL) $(OBJS)
+#	$(LD) $(LDFLAGS) -o $(KERNEL) $(OBJS)
+	$(CC) $(LDFLAGS) -o $(KERNEL) $(OBJS) -lm -lgcc
 
 $(BUILD_PATH) :
 	mkdir $(BUILD_PATH)
@@ -67,6 +68,7 @@ $(BUILD_PATH) :
 	mkdir $(BUILD_PATH)/proto
 	mkdir $(BUILD_PATH)/obj
 	mkdir $(BUILD_PATH)/protobuf-c
+	mkdir $(BUILD_PATH)/hdrhistogram
 
 -include $(DEPS)
 
