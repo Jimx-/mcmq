@@ -7,6 +7,8 @@
 #include "virtio.h"
 #include "virtio_vsock.h"
 
+#include <assert.h>
+
 #define DEFAULT_RX_BUF_SIZE PG_SIZE
 
 static struct virtio_dev* vsock_dev;

@@ -9,40 +9,6 @@
 
 #include <string.h>
 
-static void* pb_alloc(void* opaque, size_t size)
-{
-    void* ptr;
-
-    size = roundup(size, 4);
-    ptr = slaballoc(size + sizeof(uint32_t));
-
-    if (!ptr) {
-        size = roundup(size, PG_SIZE);
-        ptr = vmalloc_pages(size >> PG_SHIFT, NULL);
-        size |= 1;
-    }
-
-    *(uint32_t*)ptr = (uint32_t)size;
-    return ptr + sizeof(uint32_t);
-}
-
-static void pb_free(void* opaque, void* ptr)
-{
-    void* p = ptr - sizeof(uint32_t);
-    uint32_t size = *(uint32_t*)p;
-
-    if (size & 1)
-        vmfree(p, size & ~1);
-    else
-        slabfree(p, size);
-}
-
-static ProtobufCAllocator pb_allocator = {
-    .alloc = pb_alloc,
-    .free = pb_free,
-    .allocator_data = NULL,
-};
-
 void ssd_init_config_default(struct ssd_config* config)
 {
     memset(config, 0, sizeof(*config));
@@ -267,10 +233,9 @@ static void ssd_config_recv_callback(uint32_t src_cid, uint32_t src_port,
     msg_len = *(const uint16_t*)buf;
     msg_len = be16_to_cpup(&msg_len);
 
-    pb_config =
-        mcmq__ssd_config__unpack(&pb_allocator, msg_len - 2, (uint8_t*)&buf[2]);
+    pb_config = mcmq__ssd_config__unpack(NULL, msg_len, (uint8_t*)&buf[2]);
     init_config_from_pb(&config, pb_config);
-    mcmq__ssd_config__free_unpacked(pb_config, &pb_allocator);
+    mcmq__ssd_config__free_unpacked(pb_config, NULL);
 
     ssd_init_config(&config);
 
@@ -387,4 +352,9 @@ void ssd_dump_config(struct ssd_config* config)
     printk("  Page capacity: 0x%x\r\n", config->flash_config.page_capacity);
 
     printk("==============================\r\n");
+}
+
+void ssd_report_result(Mcmq__SimResult* result)
+{
+    hostif_report_result(result);
 }

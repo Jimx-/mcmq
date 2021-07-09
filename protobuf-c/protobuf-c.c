@@ -142,15 +142,13 @@ uint32_t protobuf_c_version_number(void) { return PROTOBUF_C_VERSION_NUMBER; }
 static void* system_alloc(void* allocator_data, size_t size)
 {
     (void)allocator_data;
-    assert(FALSE && "system_alloc not supported");
-    return NULL;
+    return malloc(size);
 }
 
 static void system_free(void* allocator_data, void* data)
 {
     (void)allocator_data;
-    assert(FALSE && "system_free not supported");
-    /* free(data); */
+    free(data);
 }
 
 static inline void* do_alloc(ProtobufCAllocator* allocator, size_t size)
@@ -515,12 +513,12 @@ field_is_zeroish(const ProtobufCFieldDescriptor* field, const void* member)
     case PROTOBUF_C_TYPE_FIXED64:
         ret = (0 == *(const uint64_t*)member);
         break;
-    /* case PROTOBUF_C_TYPE_FLOAT: */
-    /*     ret = (0 == *(const float*)member); */
-    /*     break; */
-    /* case PROTOBUF_C_TYPE_DOUBLE: */
-    /*     ret = (0 == *(const double*)member); */
-    /*     break; */
+    case PROTOBUF_C_TYPE_FLOAT:
+        ret = (0 == *(const float*)member);
+        break;
+    case PROTOBUF_C_TYPE_DOUBLE:
+        ret = (0 == *(const double*)member);
+        break;
     case PROTOBUF_C_TYPE_STRING:
         ret = (NULL == *(const char* const*)member) ||
               ('\0' == **(const char* const*)member);

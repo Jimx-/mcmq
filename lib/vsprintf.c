@@ -356,6 +356,14 @@ int vsprintf(char* buf, const char* fmt, va_list args)
         case 'u':
             break;
 
+        case 'E':
+        case 'G':
+        case 'e':
+        case 'f':
+        case 'g':
+            (void)va_arg(args, double);
+            continue;
+
         default:
             if (*fmt != '%') *str++ = '%';
             if (*fmt) {
@@ -388,6 +396,18 @@ int vsprintf(char* buf, const char* fmt, va_list args)
 }
 
 int sprintf(char* buf, const char* fmt, ...)
+{
+    va_list args;
+    int n;
+
+    va_start(args, fmt);
+    n = vsprintf(buf, fmt, args);
+    va_end(args);
+
+    return n;
+}
+
+int snprintf(char* buf, size_t size, const char* fmt, ...)
 {
     va_list args;
     int n;

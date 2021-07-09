@@ -4,7 +4,12 @@
 #include "proto.h"
 #include "ssd.h"
 
+#include "proto/sim_result.pb-c.h"
+
+#include "hdrhistogram/hdr_histogram.h"
+
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define CAP_DSTRD 0
@@ -37,9 +42,16 @@ struct nvme_queue {
     uint8_t cq_phase;
 
     uint16_t cq_vector;
+
+    uint64_t read_request_count;
+    uint64_t write_request_count;
+
+    struct hdr_histogram* read_latency_hist;
+    struct hdr_histogram* write_latency_hist;
 };
 
 static struct nvme_queue nvme_queues[1 + CONFIG_NVME_IO_QUEUE_MAX];
+static unsigned int io_queue_count;
 
 static inline int nvmeq_worker(int qid)
 {
@@ -119,7 +131,7 @@ static int process_create_cq_command(struct nvme_create_cq* cmd,
 
     nvmeq = &nvme_queues[qid];
 
-    nvmeq->cq_depth = cmd->qsize;
+    nvmeq->cq_depth = cmd->qsize + 1;
     nvmeq->cq_dma_addr = cmd->prp1;
     nvmeq->cq_vector = cmd->irq_vector;
 
@@ -142,10 +154,14 @@ static int process_create_sq_command(struct nvme_create_sq* cmd,
     /* CQ not created. */
     if (!nvmeq->cq_depth) return NVME_SC_CQ_INVALID;
 
-    nvmeq->sq_depth = cmd->qsize;
+    nvmeq->sq_depth = cmd->qsize + 1;
     nvmeq->sq_dma_addr = cmd->prp1;
 
     init_nvme_queue(nvmeq, qid);
+    io_queue_count++;
+
+    hdr_init(1, UINT64_C(2000000), 1, &nvmeq->read_latency_hist);
+    hdr_init(1, UINT64_C(2000000), 1, &nvmeq->write_latency_hist);
 
     return 0;
 }
@@ -228,7 +244,13 @@ static void process_io_command(struct nvme_queue* nvmeq,
     req->nsid = cmd->rw.nsid;
     req->start_lba = cmd->rw.slba;
     req->sector_count = cmd->rw.length + 1;
+    req->start_timestamp = current_time_ns();
     INIT_LIST_HEAD(&req->txn_list);
+
+    if (req->do_write)
+        nvmeq->write_request_count++;
+    else
+        nvmeq->read_request_count++;
 
     segment_user_request(req, nvmeq_worker(nvmeq->qid));
     enqueue_user_request(nvmeq_worker(nvmeq->qid), req);
@@ -370,10 +392,85 @@ void nvme_process_write_message(uint64_t addr, const char* buf, size_t len)
 void nvme_complete_request(struct user_request* req)
 {
     struct nvme_queue* nvmeq;
+    time_ns_t end_timestamp, latency;
+
+    end_timestamp = current_time_ns();
+    latency = end_timestamp - req->start_timestamp;
 
     nvmeq = &nvme_queues[req->qid];
+
+    if (req->do_write)
+        hdr_record_value(nvmeq->write_latency_hist, latency / 1000);
+    else
+        hdr_record_value(nvmeq->read_latency_hist, latency / 1000);
+
     post_cqe(nvmeq, req->status, req->command_id, NULL);
     release_user_request(req);
 
     hostif_send_irq(nvmeq->cq_vector);
+}
+
+void nvme_report_result(Mcmq__SimResult* result)
+{
+    int i;
+    static const int ticks_per_half_distance = 5;
+
+    result->n_host_queue_stats = io_queue_count;
+    result->host_queue_stats =
+        calloc(io_queue_count, sizeof(Mcmq__HostQueueStats*));
+
+    for (i = 0; i < io_queue_count; i++) {
+        struct nvme_queue* nvmeq = &nvme_queues[i + 1];
+        struct Mcmq__HostQueueStats* queue_stats =
+            malloc(sizeof(Mcmq__HostQueueStats));
+
+        result->host_queue_stats[i] = queue_stats;
+        mcmq__host_queue_stats__init(queue_stats);
+
+        queue_stats->queue_id = nvmeq->qid;
+
+        queue_stats->read_request_count = nvmeq->read_request_count;
+        queue_stats->write_request_count = nvmeq->write_request_count;
+
+#define SET_LATENCY_HISTOGRAM(name)                                        \
+    do {                                                                   \
+        struct hdr_iter iter;                                              \
+        struct hdr_iter_percentiles* percentiles;                          \
+        int j, count = 0;                                                  \
+        queue_stats->name##_request_turnaround_time_mean =                 \
+            hdr_mean(nvmeq->name##_latency_hist);                          \
+        queue_stats->name##_request_turnaround_time_stddev =               \
+            hdr_stddev(nvmeq->name##_latency_hist);                        \
+        queue_stats->max_##name##_request_turnaround_time =                \
+            hdr_max(nvmeq->name##_latency_hist);                           \
+        hdr_iter_percentile_init(&iter, nvmeq->name##_latency_hist,        \
+                                 ticks_per_half_distance);                 \
+        while (hdr_iter_next(&iter)) {                                     \
+            count++;                                                       \
+        }                                                                  \
+        queue_stats->n_##name##_request_turnaround_time_histogram = count; \
+        if (count) {                                                       \
+            queue_stats->name##_request_turnaround_time_histogram =        \
+                calloc(count, sizeof(Mcmq__HistogramEntry*));              \
+            j = 0;                                                         \
+            hdr_iter_percentile_init(&iter, nvmeq->name##_latency_hist,    \
+                                     ticks_per_half_distance);             \
+            while (hdr_iter_next(&iter) && j < count) {                    \
+                struct Mcmq__HistogramEntry* entry =                       \
+                    malloc(sizeof(Mcmq__HistogramEntry));                  \
+                percentiles = &iter.specifics.percentiles;                 \
+                mcmq__histogram_entry__init(entry);                        \
+                queue_stats->name##_request_turnaround_time_histogram[j] = \
+                    entry;                                                 \
+                entry->value = iter.highest_equivalent_value;              \
+                entry->percentile = percentiles->percentile;               \
+                entry->total_count = iter.cumulative_count;                \
+                j++;                                                       \
+            }                                                              \
+        }                                                                  \
+    } while (0)
+
+        SET_LATENCY_HISTOGRAM(read);
+        SET_LATENCY_HISTOGRAM(write);
+    }
 }

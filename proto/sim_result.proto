@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package mcmq;
+
+message HistogramEntry {
+    double value = 1;
+    double percentile = 2;
+    uint64 total_count = 3;
+}
+
+message HostQueueStats {
+    uint32 queue_id = 1;
+    
+    repeated HistogramEntry read_request_turnaround_time_histogram = 2;
+    repeated HistogramEntry write_request_turnaround_time_histogram = 3;
+
+    double read_request_turnaround_time_mean = 4;
+    double read_request_turnaround_time_stddev = 5;
+    double max_read_request_turnaround_time = 6;
+
+    double write_request_turnaround_time_mean = 7;
+    double write_request_turnaround_time_stddev = 8;
+    double max_write_request_turnaround_time = 9;
+
+    uint64 read_request_count = 10;
+    uint64 write_request_count = 11;
+}
+
+message SimResult {
+    repeated HostQueueStats host_queue_stats = 1;
+}

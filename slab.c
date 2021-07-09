@@ -3,6 +3,7 @@
 #include "global.h"
 #include "list.h"
 #include "proto.h"
+#include "spinlock.h"
 #include "vm.h"
 
 #include <string.h>
@@ -31,7 +32,12 @@ struct slabdata {
     struct slabheader header;
 };
 
-static struct list_head slabs[SLABSIZE];
+struct slab {
+    struct list_head list;
+    spinlock_t lock;
+};
+
+static struct slab slabs[SLABSIZE];
 
 #define SLAB_INDEX(bytes) (roundup(bytes, OBJ_ALIGN) - (MINSIZE / OBJ_ALIGN))
 
@@ -39,7 +45,8 @@ void slabs_init()
 {
     int i;
     for (i = 0; i < SLABSIZE; i++) {
-        INIT_LIST_HEAD(&slabs[i]);
+        spin_lock_init(&slabs[i].lock);
+        INIT_LIST_HEAD(&slabs[i].list);
     }
 }
 
@@ -66,22 +73,25 @@ void* slaballoc(size_t bytes)
         return NULL;
     }
 
-    struct list_head* slab = &slabs[SLAB_INDEX(bytes)];
+    struct slab* slab = &slabs[SLAB_INDEX(bytes)];
     struct slabdata* sd = NULL;
     struct slabheader* header;
+    void* ptr = NULL;
 
     bytes = roundup(bytes, OBJ_ALIGN);
 
-    if (list_empty(slab)) {
-        sd = alloc_slabdata();
-        if (!sd) return NULL;
+    spin_lock(&slab->lock);
 
-        list_add(&sd->header.list, slab);
+    if (list_empty(&slab->list)) {
+        sd = alloc_slabdata();
+        if (!sd) goto out;
+
+        list_add(&sd->header.list, &slab->list);
     }
 
     int i;
     int max_objs = DATABYTES / bytes;
-    list_for_each_entry(header, slab, list)
+    list_for_each_entry(header, &slab->list, list)
     {
         if (header->used == max_objs) continue;
 
@@ -92,7 +102,8 @@ void* slaballoc(size_t bytes)
                 header->freeguess = i + 1;
                 header->used++;
 
-                return (void*)&sd->data[i * bytes];
+                ptr = (void*)&sd->data[i * bytes];
+                goto out;
             }
         }
 
@@ -103,16 +114,17 @@ void* slaballoc(size_t bytes)
                 header->freeguess = i + 1;
                 header->used++;
 
-                return (void*)&sd->data[i * bytes];
+                ptr = (void*)&sd->data[i * bytes];
+                goto out;
             }
         }
     }
 
     sd = alloc_slabdata();
-    if (!sd) return NULL;
+    if (!sd) goto out;
 
     header = &sd->header;
-    list_add(&header->list, slab);
+    list_add(&header->list, &slab->list);
 
     for (i = 0; i < max_objs; i++) {
         if (!GET_BIT(header->used_mask, i)) {
@@ -120,11 +132,14 @@ void* slaballoc(size_t bytes)
             header->freeguess = i + 1;
             header->used++;
 
-            return (void*)&sd->data[i * bytes];
+            ptr = (void*)&sd->data[i * bytes];
+            goto out;
         }
     }
 
-    return NULL;
+out:
+    spin_unlock(&slab->lock);
+    return ptr;
 }
 
 void slabfree(void* mem, size_t bytes)
@@ -133,15 +148,17 @@ void slabfree(void* mem, size_t bytes)
         return;
     }
 
-    struct list_head* slab = &slabs[SLAB_INDEX(bytes)];
+    struct slab* slab = &slabs[SLAB_INDEX(bytes)];
     struct slabdata* sd;
     struct slabheader* header;
 
+    spin_lock(&slab->lock);
+
     bytes = roundup(bytes, OBJ_ALIGN);
 
-    if (list_empty(slab)) return;
+    if (list_empty(&slab->list)) goto out;
 
-    list_for_each_entry(header, slab, list)
+    list_for_each_entry(header, &slab->list, list)
     {
         if (header->used == 0) continue;
         sd = header->data;
@@ -151,7 +168,10 @@ void slabfree(void* mem, size_t bytes)
             UNSET_BIT(header->used_mask, i);
             header->used--;
             header->freeguess = i;
-            return;
+            goto out;
         }
     }
+
+out:
+    spin_unlock(&slab->lock);
 }

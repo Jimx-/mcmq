@@ -1,5 +1,6 @@
 #include "global.h"
 #include "proto.h"
+#include "spinlock.h"
 #include "vm.h"
 
 #include <errno.h>
@@ -16,6 +17,7 @@ struct hole {
 static struct hole hole[NR_HOLES]; /* the hole table */
 static struct hole* hole_head;     /* pointer to first hole */
 static struct hole* free_slots;    /* ptr to list of unused table slots */
+static spinlock_t alloc_lock;
 
 static void delete_slot(struct hole* prev_ptr, struct hole* hp);
 static void merge_hole(struct hole* hp);
@@ -23,6 +25,8 @@ static void merge_hole(struct hole* hp);
 void mem_init(unsigned long mem_start, unsigned long free_mem_size)
 {
     struct hole* hp;
+
+    spin_lock_init(&alloc_lock);
 
     for (hp = &hole[0]; hp < &hole[NR_HOLES]; hp++) {
         hp->h_next = hp + 1;
@@ -40,6 +44,9 @@ unsigned long alloc_mem(unsigned long memsize)
 {
     struct hole *hp, *prev_ptr;
     unsigned long old_base;
+    unsigned long ret = 0;
+
+    spin_lock(&alloc_lock);
 
     prev_ptr = NULL;
     hp = hole_head;
@@ -52,14 +59,17 @@ unsigned long alloc_mem(unsigned long memsize)
 
             if (hp->h_len == 0) delete_slot(prev_ptr, hp);
 
-            return old_base;
+            ret = old_base;
+            goto out;
         }
 
         prev_ptr = hp;
         hp = hp->h_next;
     }
 
-    return 0;
+out:
+    spin_unlock(&alloc_lock);
+    return ret;
 }
 
 unsigned long alloc_pages(size_t nr_pages)
@@ -68,6 +78,9 @@ unsigned long alloc_pages(size_t nr_pages)
     struct hole *hp, *prev_ptr;
     unsigned long old_base;
     unsigned long page_align = PG_SIZE;
+    unsigned long ret = 0;
+
+    spin_lock(&alloc_lock);
 
     prev_ptr = NULL;
     hp = hole_head;
@@ -84,14 +97,17 @@ unsigned long alloc_pages(size_t nr_pages)
 
             if (hp->h_len == 0) delete_slot(prev_ptr, hp);
 
-            return old_base;
+            ret = old_base;
+            goto out;
         }
 
         prev_ptr = hp;
         hp = hp->h_next;
     }
 
-    return 0;
+out:
+    spin_unlock(&alloc_lock);
+    return ret;
 }
 
 void* vmalloc_pages(size_t nr_pages, unsigned long* phys_addr)
@@ -108,6 +124,9 @@ int free_mem(unsigned long base, unsigned long len)
     struct hole *hp, *new_ptr, *prev_ptr;
 
     if (len == 0) return EINVAL;
+
+    spin_lock(&alloc_lock);
+
     if ((new_ptr = free_slots) == NULL) panic("hole table full");
     new_ptr->h_base = base;
     new_ptr->h_len = len;
@@ -118,7 +137,7 @@ int free_mem(unsigned long base, unsigned long len)
         new_ptr->h_next = hp;
         hole_head = new_ptr;
         merge_hole(new_ptr);
-        return 0;
+        goto out;
     }
 
     prev_ptr = NULL;
@@ -130,6 +149,9 @@ int free_mem(unsigned long base, unsigned long len)
     new_ptr->h_next = prev_ptr->h_next;
     prev_ptr->h_next = new_ptr;
     merge_hole(prev_ptr);
+
+out:
+    spin_unlock(&alloc_lock);
     return 0;
 }
 

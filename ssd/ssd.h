@@ -5,6 +5,9 @@
 
 #include "list.h"
 #include "types.h"
+
+#include "proto/sim_result.pb-c.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -25,6 +28,7 @@ struct user_request {
     lha_t start_lba;
     unsigned int sector_count;
     unsigned int status;
+    time_ns_t start_timestamp;
 
     struct list_head txn_list;
 };
@@ -73,6 +77,7 @@ struct ssd_config {
 void ssd_init(void);
 void ssd_init_config_default(struct ssd_config* config);
 void ssd_dump_config(struct ssd_config* config);
+void ssd_report_result(Mcmq__SimResult* result);
 
 /* worker.c */
 void init_ssd_worker(void);

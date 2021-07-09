@@ -1,7 +1,7 @@
 AS	= riscv64-unknown-elf-as
 CC	= riscv64-unknown-elf-gcc
 LD	= riscv64-unknown-elf-ld
-CFLAGS = -fno-builtin -fno-stack-protector -Wall -mcmodel=medany -mabi=lp64d -march=rv64imadc -g -Ilibfdt
+CFLAGS = -fno-builtin -fno-stack-protector -Wall -mcmodel=medany -mabi=lp64d -march=rv64imadc -O2 -g -Ilibfdt
 LDFLAGS = -nostdlib -Wl,-melf64lriscv,-T,riscvos.lds,-Map,System.map
 LDFLAGS_USER = -melf64lriscv -nostdlib
 
@@ -11,10 +11,11 @@ SRC_PATH	= .
 BUILD_PATH  = ./obj
 LIBSRCS		= lib/vsprintf.c lib/strlen.c lib/memcpy.c lib/memcmp.c lib/memchr.c lib/memmove.c \
 				lib/memset.c lib/strnlen.c lib/strrchr.c lib/strtoul.c lib/strchr.c lib/strcmp.c \
-				lib/assert.c lib/rand.c
+				lib/assert.c lib/rand.c lib/malloc.c
 EXTSRCS		= $(patsubst %.c, libfdt/%.c, $(LIBFDT_SRCS)) \
-					protobuf-c/protobuf-c.c
-PROTOFILES      = proto/ssd_config.proto
+					protobuf-c/protobuf-c.c \
+					hdrhistogram/hdr_histogram.c
+PROTOFILES      = proto/ssd_config.proto proto/sim_result.proto
 PROTOSRCS		= $(patsubst %.proto, %.pb-c.c, $(PROTOFILES))
 SRCS		= head.S trap.S main.c fdt.c proc.c sched.c vm.c global.c direct_tty.c memory.c \
 				exc.c syscall.c irq.c timer.c user.c gate.S alloc.c slab.c virtio.c blk.c \
