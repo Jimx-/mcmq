@@ -577,7 +577,7 @@ static void complete_chip_transfer(struct chip_data* chip)
 static void complete_die_command(struct chip_data* chip, struct die_data* die)
 {
     struct flash_command* cmd = die->current_cmd;
-    struct flash_transaction* txn;
+    struct flash_transaction *txn, *tmp;
     int i;
 
     die->current_cmd = NULL;
@@ -604,8 +604,12 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
         for (i = 0; i < cmd->nr_addrs; i++)
             set_metadata(&cmd->addrs[i], &cmd->metadata[i]);
 
-        list_for_each_entry(txn, &die->active_txns, queue)
+        list_for_each_entry_safe(txn, tmp, &die->active_txns, queue)
         {
+            /* In notify_transaction_complete(), the thread that produced this
+               txn gets immediately notified and it may release txn before we
+               continue to the next txn in the list so list_for_each_entry_safe
+               is needed. */
             notify_transaction_complete(txn);
         }
         INIT_LIST_HEAD(&die->active_txns);
@@ -615,7 +619,7 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
         break;
     case CMD_ERASE_BLOCK:
     case CMD_ERASE_BLOCK_MULTIPLANE:
-        list_for_each_entry(txn, &die->active_txns, queue)
+        list_for_each_entry_safe(txn, tmp, &die->active_txns, queue)
         {
             notify_transaction_complete(txn);
         }

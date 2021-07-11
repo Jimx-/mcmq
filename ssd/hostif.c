@@ -175,6 +175,8 @@ static int hostif_send_report(const char* buf, size_t len)
 
         virtio_vsock_send(VSOCK_HOST_CID, VSOCK_HOST_PORT, msg,
                           header_len + buf_len);
+
+        first = FALSE;
     }
 
     vmfree(msg, PG_SIZE);
