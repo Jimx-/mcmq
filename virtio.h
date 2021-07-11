@@ -65,11 +65,10 @@ struct virtio_queue {
     uint32_t size;
     struct vring vring;
 
-    unsigned int free_num;
-    unsigned int free_head;
-    unsigned int free_tail;
-    unsigned int last_used;
-    unsigned int avail_idx_shadow;
+    uint16_t free_num;
+    uint16_t free_head;
+    uint16_t free_tail;
+    uint16_t last_used;
 
     void** data;
     size_t data_size;

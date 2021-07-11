@@ -17,6 +17,7 @@ enum cache_entry_status {
 
 struct cache_entry {
     lpa_t lpa;
+    unsigned int nsid;
     page_bitmap_t bitmap;
     enum cache_entry_status status;
     struct avl_node avl;
@@ -28,6 +29,7 @@ static enum cache_mode cache_mode = CM_NO_CACHE;
 struct data_cache {
     size_t capacity_pages;
     size_t nr_pages;
+    unsigned int nsid;
     struct avl_root root;
     struct list_head lru_list;
     spinlock_t lock;
@@ -77,10 +79,12 @@ static int cache_node_node_comp(struct avl_node* node1, struct avl_node* node2)
     return 0;
 }
 
-static void cache_init(struct data_cache* cache, size_t capacity_pages)
+static void cache_init(struct data_cache* cache, unsigned int nsid,
+                       size_t capacity_pages)
 {
     cache->capacity_pages = capacity_pages;
     cache->nr_pages = 0;
+    cache->nsid = nsid;
     spin_lock_init(&cache->lock);
     INIT_LIST_HEAD(&cache->lru_list);
     INIT_AVL_ROOT(&cache->root, cache_key_node_comp, cache_node_node_comp);
@@ -230,6 +234,7 @@ void write_to_buffers(struct user_request* req)
                         wb_txn->type = TXN_WRITE;
                         wb_txn->source = TS_USER_IO;
                         wb_txn->worker = worker_self();
+                        wb_txn->nsid = cache->nsid;
                         wb_txn->lpa = entry->lpa;
                         wb_txn->ppa = NO_PPA;
                         wb_txn->length = count << SECTOR_SHIFT;
@@ -313,5 +318,5 @@ void dc_init(enum cache_mode mode, size_t capacity_pages,
     caches = (struct data_cache*)vmalloc_pages(alloc_size >> PG_SHIFT, NULL);
 
     for (i = 0; i < namespace_count; i++)
-        cache_init(&caches[i], capacity_pages / namespace_count);
+        cache_init(&caches[i], i + 1, capacity_pages / namespace_count);
 }

@@ -63,7 +63,6 @@ struct virtio_queue* vring_create_virtqueue(struct virtio_dev* vdev,
     vq->free_head = 0;
     vq->free_tail = vq->num - 1;
     vq->last_used = 0;
-    vq->avail_idx_shadow = 0;
 
     return vq;
 
@@ -116,12 +115,11 @@ int virtqueue_add_buffers(struct virtio_queue* vq, struct virtio_buffer* bufs,
 
     set_direct_descriptors(vq, bufs, count);
 
-    vring->avail->ring[vq->avail_idx_shadow % vq->num] = old_head;
+    vring->avail->ring[vring->avail->idx % vq->num] = old_head;
     vq->data[old_head] = data;
-    vq->avail_idx_shadow++;
 
     mb();
-    vring->avail->idx = vq->avail_idx_shadow;
+    vring->avail->idx++;
     mb();
 
     return 0;
@@ -154,6 +152,11 @@ int virtqueue_get_buffer(struct virtio_queue* vq, size_t* len, void** data)
         vd_idx = vd->next;
         vd = &vring->desc[vd_idx];
         count++;
+
+        if (count > 2) {
+            virtqueue_dump(vq);
+            assert(0);
+        }
     }
 
     count++;
@@ -263,11 +266,12 @@ void virtqueue_dump(struct virtio_queue* vq)
     printk("Index = %d, num = %d\r\n", vq->index, vq->num);
     printk("Free num = %d, head = %d, tail = %d\r\n", vq->free_num,
            vq->free_head, vq->free_tail);
-    printk("Last used = %d\r\n", vq->last_used);
-    printk("Avail index = %d\r\n", vq->avail_idx_shadow);
+    printk("Used index = %d, last used = %d\r\n", vq->vring.used->idx,
+           vq->last_used);
+    printk("Avail index = %d\r\n", vq->vring.avail->idx);
     printk("=============DESC=============\r\n");
     for (i = 0; i < vq->num; i++) {
-        struct virtq_desc* vd = &vq->vring.desc[i];
+        struct vring_desc* vd = &vq->vring.desc[i];
         printk("%d: ", i);
         if (vd->flags & VRING_DESC_F_NEXT) printk("-> %d ", vd->next);
         if (i == vq->free_head) printk("(FREE HEAD)");
@@ -278,7 +282,7 @@ void virtqueue_dump(struct virtio_queue* vq)
     for (i = 0; i < vq->num; i++) {
         printk("%d: %d ", i, vq->vring.avail->ring[i]);
         if (i == vq->last_used % vq->num) printk("(LAST USED)");
-        if (i == vq->avail_idx_shadow % vq->num) printk("(AVAIL IDX)");
+        if (i == vq->vring.avail->idx % vq->num) printk("(AVAIL IDX)");
 
         printk("\r\n");
     }
