@@ -749,3 +749,11 @@ void nvm_ctlr_timer_interrupt(void)
     check_completion();
     rearm_timer();
 }
+
+void nvm_ctlr_report_result(Mcmq__SimResult* result)
+{
+    printk("R/MR: %d/%d\r\n", stats.read_cmds, stats.multiplane_read_cmds);
+    printk("W/MW: %d/%d\r\n", stats.program_cmds,
+           stats.multiplane_program_cmds);
+    printk("E/ME: %d/%d\r\n", stats.erase_cmds, stats.multiplane_erase_cmds);
+}

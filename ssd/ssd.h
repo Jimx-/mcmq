@@ -155,5 +155,6 @@ enum chip_status nvm_ctlr_get_chip_status(unsigned int channel,
 void nvm_ctlr_timer_interrupt(void);
 void nvm_ctlr_get_metadata(struct flash_address* addr,
                            struct page_metadata* metadata);
+void nvm_ctlr_report_result(Mcmq__SimResult* result);
 
 #endif

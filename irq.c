@@ -1,5 +1,6 @@
 #include "fdt.h"
 #include "global.h"
+#include "of.h"
 #include "proto.h"
 
 #include "smp.h"
@@ -61,7 +62,7 @@ static int fdt_scan_plic(void* blob, unsigned long offset, const char* name,
                          int depth, void* arg)
 {
     const char* type = fdt_getprop(blob, offset, "compatible", NULL);
-    int cpu = 0;
+    int cpu;
 
     if (!type || strcmp(type, "riscv,plic0") != 0) return 0;
 
@@ -81,20 +82,34 @@ static int fdt_scan_plic(void* blob, unsigned long offset, const char* name,
 
     plic->regs = vm_mapio(base, size);
 
-    struct plic_context* ctx = get_cpu_var_ptr(cpu, plic_contexts);
-    ctx->plic = plic;
-    ctx->hart_base = plic->regs + CONTEXT_BASE + 0 * CONTEXT_PER_HART;
-    ctx->enable_base = plic->regs + ENABLE_BASE + 0 * ENABLE_PER_HART;
-
     const uint32_t* ndev;
     ndev = fdt_getprop(blob, offset, "riscv,ndev", &len);
     if (!ndev) return 0;
 
     int nr_irqs = of_read_number(ndev, 1);
 
-    int hwirq;
-    for (hwirq = 1; hwirq <= nr_irqs; hwirq++)
-        plic_toggle(ctx, hwirq, 0);
+    int nr_contexts = of_irq_count(blob, offset);
+    int i;
+    for (i = 0; i < nr_contexts; i++) {
+        struct of_phandle_args parent;
+        uint32_t hart;
+
+        if (of_irq_parse_one(blob, offset, i, &parent)) continue;
+
+        if (parent.args[0] != IRQ_S_EXT) continue;
+
+        hart = riscv_of_parent_hartid(blob, parent.offset);
+        cpu = hart_to_cpu_id[hart];
+
+        struct plic_context* ctx = get_cpu_var_ptr(cpu, plic_contexts);
+        ctx->plic = plic;
+        ctx->hart_base = plic->regs + CONTEXT_BASE + i * CONTEXT_PER_HART;
+        ctx->enable_base = plic->regs + ENABLE_BASE + i * ENABLE_PER_HART;
+
+        int hwirq;
+        for (hwirq = 1; hwirq <= nr_irqs; hwirq++)
+            plic_toggle(ctx, hwirq, 0);
+    }
 
     return 1;
 }

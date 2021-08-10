@@ -48,6 +48,7 @@ void release_user_request(struct user_request* req)
 int enqueue_user_request(int worker, struct user_request* req)
 {
     struct event* event;
+    assert(worker < CONFIG_SMP_MAX_CPUS);
 
     SLABALLOC(event);
     if (!event) return ENOMEM;

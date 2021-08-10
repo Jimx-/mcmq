@@ -357,4 +357,5 @@ void ssd_dump_config(struct ssd_config* config)
 void ssd_report_result(Mcmq__SimResult* result)
 {
     hostif_report_result(result);
+    nvm_ctlr_report_result(result);
 }

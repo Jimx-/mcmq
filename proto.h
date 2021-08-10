@@ -84,6 +84,7 @@ void init_smp(unsigned int bsp_hart, void* dtb);
 void smp_commence(void);
 void software_interrupt(void);
 void smp_notify(unsigned int cpu);
+int riscv_of_parent_hartid(const void* blob, unsigned long offset);
 
 /* vsock.c */
 int init_vsock(void);

@@ -1,6 +1,7 @@
 #include "const.h"
 #include "global.h"
 #include "irq.h"
+#include "of.h"
 #include "pci.h"
 #include "proto.h"
 #include "smp.h"
@@ -15,6 +16,8 @@
 void kernel_main(unsigned int hart_id, void* dtb_phys)
 {
     void* dtb = __va(dtb_phys);
+
+    fdt_root = dtb;
 
     init_memory(dtb);
     init_smp(hart_id, dtb);

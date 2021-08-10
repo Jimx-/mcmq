@@ -68,6 +68,22 @@ static int fdt_scan_hart(void* blob, unsigned long offset, const char* name,
     return 0;
 }
 
+int riscv_of_parent_hartid(const void* blob, unsigned long offset)
+{
+    for (; offset >= 0; offset = fdt_parent_offset(blob, offset)) {
+        const char* compatible = fdt_getprop(blob, offset, "compatible", NULL);
+        if (!compatible || strcmp(compatible, "riscv") != 0) continue;
+
+        const uint32_t* reg = fdt_getprop(blob, offset, "reg", NULL);
+        if (!reg) continue;
+
+        uint32_t hart = be32_to_cpup(reg);
+        return hart;
+    }
+
+    return -1;
+}
+
 static void setup_cpulocals(void)
 {
     size_t size;

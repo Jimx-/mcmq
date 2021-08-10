@@ -55,7 +55,8 @@ static unsigned int io_queue_count;
 
 static inline int nvmeq_worker(int qid)
 {
-    return THREAD_WORKER_START + qid - 1;
+    static const int worker_max = CONFIG_SMP_MAX_CPUS - THREAD_WORKER_START;
+    return THREAD_WORKER_START + (qid - 1) % worker_max;
 }
 
 void hostif_nvme_init(unsigned int sectors_in_page)

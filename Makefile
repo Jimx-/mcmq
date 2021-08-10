@@ -4,6 +4,7 @@ LD	= riscv64-unknown-elf-ld
 CFLAGS = -fno-builtin -fno-stack-protector -Wall -mcmodel=medany -mabi=lp64d -march=rv64imadc -O2 -g -Ilibfdt
 LDFLAGS = -nostdlib -Wl,-melf64lriscv,-T,riscvos.lds,-Map,System.map
 LDFLAGS_USER = -melf64lriscv -nostdlib
+QEMU = qemu-system-riscv64
 
 include libfdt/Makefile.libfdt
 
@@ -17,9 +18,9 @@ EXTSRCS		= $(patsubst %.c, libfdt/%.c, $(LIBFDT_SRCS)) \
 					hdrhistogram/hdr_histogram.c
 PROTOFILES      = proto/ssd_config.proto proto/sim_result.proto
 PROTOSRCS		= $(patsubst %.proto, %.pb-c.c, $(PROTOFILES))
-SRCS		= head.S trap.S main.c fdt.c proc.c sched.c vm.c global.c direct_tty.c memory.c \
+SRCS		= head.S trap.S main.c fdt.c of.c proc.c sched.c vm.c global.c direct_tty.c memory.c \
 				exc.c syscall.c irq.c timer.c user.c gate.S alloc.c slab.c virtio.c blk.c \
-				pci.c smp.c virtio_mmio.c virtio_pci.c vsock.c ivshmem.c ringbuf.c \
+				pci.c smp.c virtio_mmio.c virtio_pci.c vsock.c ivshmem.c ringbuf.c\
 				ssd/ssd.c ssd/hostif.c ssd/hostif_nvme.c ssd/worker.c ssd/data_cache.c ssd/amu.c \
 				ssd/block_manager.c ssd/tsu.c ssd/nvm_ctlr.c \
 				$(LIBSRCS) $(EXTSRCS) $(PROTOSRCS)
@@ -46,10 +47,10 @@ run :
 	@spike bbl
 
 qemu :
-	@qemu-system-riscv64 -smp 4 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3
+	@$(QEMU) -smp 8 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -nographic
 
 qemudbg :
-	@qemu-system-riscv64 -smp 4 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -s -S
+	@$(QEMU) -smp 4 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -s -S
 
 clean :
 	rm $(KERNEL)
