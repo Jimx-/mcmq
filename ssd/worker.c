@@ -187,3 +187,15 @@ void process_worker_queue(void)
 
     if (self == THREAD_TSU) tsu_flush_queues();
 }
+
+void ssd_worker_thread(void)
+{
+    unsigned int self = smp_processor_id();
+
+    if (self == THREAD_VSOCK_TX) {
+        virtio_vsock_tx_thread();
+    } else {
+        while (1)
+            wait_for_interrupt();
+    }
+}

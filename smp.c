@@ -174,8 +174,7 @@ void smp_boot_ap(void)
     while (!smp_commenced)
         ;
 
-    while (1)
-        wait_for_interrupt();
+    ssd_worker_thread();
 }
 
 void smp_commence(void)

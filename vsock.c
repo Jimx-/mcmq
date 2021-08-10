@@ -13,7 +13,6 @@
 
 static struct virtio_dev* vsock_dev;
 static struct virtio_vsock_config vsock_config;
-static spinlock_t send_lock;
 
 enum {
     VSOCK_VQ_RX = 0, /* for host to guest data */
@@ -25,6 +24,9 @@ static struct virtio_queue* vqs[VSOCK_VQ_MAX];
 static int rx_buf_nr;
 static int rx_max_buf_nr;
 static size_t fwd_count;
+
+static spinlock_t send_pkt_list_lock;
+static struct list_head send_pkt_list;
 
 static uint32_t local_port = 8000;
 
@@ -112,7 +114,8 @@ int init_vsock(void)
 {
     int retval;
 
-    spin_lock_init(&send_lock);
+    spin_lock_init(&send_pkt_list_lock);
+    INIT_LIST_HEAD(&send_pkt_list);
 
     vq_callback_t callbacks[] = {
         virtio_vsock_rx_done,
@@ -171,15 +174,7 @@ static void virtio_vsock_rx_done(struct virtio_queue* vq)
     virtqueue_kick(vq);
 }
 
-static void virtio_vsock_tx_done(struct virtio_queue* vq)
-{
-    void* data;
-
-    while (!virtqueue_get_buffer(vq, NULL, &data)) {
-        struct virtio_vsock_pkt* pkt = data;
-        virtio_vsock_free_pkt(pkt);
-    }
-}
+static void virtio_vsock_tx_done(struct virtio_queue* vq) {}
 
 static void virtio_vsock_event_done(struct virtio_queue* vq)
 {
@@ -254,39 +249,72 @@ int virtio_vsock_send(uint32_t dst_cid, uint32_t dst_port, const char* buf,
 {
     uint32_t src_cid = vsock_config.guest_cid;
     uint32_t src_port = local_port;
-    struct virtio_queue* vq = vqs[VSOCK_VQ_TX];
-    struct virtio_buffer bufs[2];
     struct virtio_vsock_pkt* pkt;
     int retval;
-
-    spin_lock(&send_lock);
 
     retval = ENOMEM;
     pkt =
         virtio_vsock_alloc_pkt(VIRTIO_VSOCK_TYPE_STREAM, VIRTIO_VSOCK_OP_RW,
                                buf, len, src_cid, src_port, dst_cid, dst_port);
-    if (!pkt) goto unlock;
+    if (!pkt) return retval;
 
     virtio_vsock_inc_tx_pkt(pkt);
 
-    bufs[0].phys_addr = __pa(&pkt->hdr);
-    bufs[0].size = sizeof(pkt->hdr);
-    bufs[0].write = 0;
+    spin_lock(&send_pkt_list_lock);
+    list_add_tail(&pkt->list, &send_pkt_list);
+    spin_unlock(&send_pkt_list_lock);
 
-    bufs[1].phys_addr = __pa(pkt->buf);
-    bufs[1].size = pkt->len;
-    bufs[1].write = 0;
+    return 0;
+}
 
-    retval = virtqueue_add_buffers(vq, bufs, 2, pkt);
-    if (retval) {
-        virtio_vsock_free_pkt(pkt);
-        retval = -retval;
-        goto unlock;
+void virtio_vsock_tx_thread(void)
+{
+    struct virtio_queue* vq = vqs[VSOCK_VQ_TX];
+    struct virtio_buffer bufs[2];
+    struct virtio_vsock_pkt* pkt;
+    int added, retval;
+
+    while (TRUE) {
+        void* data;
+
+        while (!virtqueue_get_buffer(vq, NULL, &data)) {
+            pkt = data;
+            virtio_vsock_free_pkt(pkt);
+        }
+
+        added = FALSE;
+
+        while (vq->free_num > 2) {
+            spin_lock(&send_pkt_list_lock);
+
+            if (list_empty(&send_pkt_list)) {
+                spin_unlock(&send_pkt_list_lock);
+                break;
+            }
+
+            pkt = list_entry(send_pkt_list.next, struct virtio_vsock_pkt, list);
+            list_del(&pkt->list);
+            spin_unlock(&send_pkt_list_lock);
+
+            bufs[0].phys_addr = __pa(&pkt->hdr);
+            bufs[0].size = sizeof(pkt->hdr);
+            bufs[0].write = 0;
+
+            bufs[1].phys_addr = __pa(pkt->buf);
+            bufs[1].size = pkt->len;
+            bufs[1].write = 0;
+
+            retval = virtqueue_add_buffers(vq, bufs, 2, pkt);
+            if (retval) {
+                spin_lock(&send_pkt_list_lock);
+                list_add(&pkt->list, &send_pkt_list);
+                spin_unlock(&send_pkt_list_lock);
+                break;
+            }
+
+            added = TRUE;
+        }
+
+        if (added) virtqueue_kick(vq);
     }
-
-    virtqueue_kick(vq);
-
-unlock:
-    spin_unlock(&send_lock);
-    return retval;
 }

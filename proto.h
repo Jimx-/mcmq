@@ -88,6 +88,7 @@ int riscv_of_parent_hartid(const void* blob, unsigned long offset);
 
 /* vsock.c */
 int init_vsock(void);
+void virtio_vsock_tx_thread(void);
 void virtio_vsock_set_recv_callback(void (*callback)(uint32_t, uint32_t,
                                                      const char*, size_t));
 int virtio_vsock_connect(uint32_t dst_cid, uint32_t dst_port);

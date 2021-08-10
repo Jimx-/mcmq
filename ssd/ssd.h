@@ -18,7 +18,8 @@ typedef uint64_t pda_t; /* physical device address */
 #define SECTOR_SHIFT 9
 
 #define THREAD_TSU 1
-#define THREAD_WORKER_START 2
+#define THREAD_VSOCK_TX 2
+#define THREAD_WORKER_START 3
 
 struct user_request {
     int do_write;
@@ -82,6 +83,7 @@ void ssd_report_result(Mcmq__SimResult* result);
 /* worker.c */
 void init_ssd_worker(void);
 unsigned int worker_self(void);
+void ssd_worker_thread(void);
 void notify_worker(int worker);
 int enqueue_user_request(int worker, struct user_request* req);
 void process_worker_queue(void);
