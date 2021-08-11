@@ -493,6 +493,8 @@ void nvm_ctlr_dispatch(struct list_head* txn_list)
             &die->active_cmd->metadata[txn_count++];
         *addr = txn->addr;
         metadata->lpa = txn->lpa;
+
+        txn->dispatch_time = current_time_ns();
     }
 
     die->active_cmd->nr_addrs = txn_count;
@@ -752,8 +754,18 @@ void nvm_ctlr_timer_interrupt(void)
 
 void nvm_ctlr_report_result(Mcmq__SimResult* result)
 {
-    printk("R/MR: %d/%d\r\n", stats.read_cmds, stats.multiplane_read_cmds);
-    printk("W/MW: %d/%d\r\n", stats.program_cmds,
-           stats.multiplane_program_cmds);
-    printk("E/ME: %d/%d\r\n", stats.erase_cmds, stats.multiplane_erase_cmds);
+    struct Mcmq__NvmControllerStats* nvm_ctlr_stats =
+        malloc(sizeof(Mcmq__NvmControllerStats));
+
+    mcmq__nvm_controller_stats__init(nvm_ctlr_stats);
+    result->nvm_controller_stats = nvm_ctlr_stats;
+
+    nvm_ctlr_stats->read_command_count = stats.read_cmds;
+    nvm_ctlr_stats->multiplane_read_command_count = stats.multiplane_read_cmds;
+    nvm_ctlr_stats->program_command_count = stats.program_cmds;
+    nvm_ctlr_stats->multiplane_program_command_count =
+        stats.multiplane_program_cmds;
+    nvm_ctlr_stats->erase_command_count = stats.erase_cmds;
+    nvm_ctlr_stats->multiplane_erase_command_count =
+        stats.multiplane_erase_cmds;
 }

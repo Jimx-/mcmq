@@ -57,6 +57,9 @@ struct flash_transaction {
     struct flash_transaction* related_read;
     struct flash_transaction* related_write;
     struct flash_transaction* related_erase;
+
+    time_ns_t enqueue_time;
+    time_ns_t dispatch_time;
 };
 
 enum flash_technology {

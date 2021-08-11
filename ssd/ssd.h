@@ -138,6 +138,8 @@ void tsu_process_transaction(struct flash_transaction* txn);
 void tsu_flush_queues(void);
 void tsu_notify_channel_idle(unsigned int channel);
 void tsu_notify_chip_idle(unsigned int channel, unsigned int chip);
+void tsu_transaction_complete(struct flash_transaction* txn);
+void tsu_report_result(Mcmq__SimResult* result);
 
 /* nvm_ctlr.c */
 void nvm_ctlr_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,

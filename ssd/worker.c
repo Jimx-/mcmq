@@ -178,6 +178,7 @@ void process_worker_queue(void)
                 }
 
                 bm_transaction_complete(event.txn);
+                tsu_transaction_complete(event.txn);
 
                 SLABFREE(event.txn);
                 break;

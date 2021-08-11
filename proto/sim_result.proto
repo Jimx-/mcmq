@@ -26,6 +26,39 @@ message HostQueueStats {
     uint64 write_request_count = 11;
 }
 
+message NvmControllerStats {
+    uint64 read_command_count = 1;
+    uint64 multiplane_read_command_count = 2;
+    uint64 program_command_count = 3;
+    uint64 multiplane_program_command_count = 4;
+    uint64 erase_command_count = 5;
+    uint64 multiplane_erase_command_count = 6;    
+}
+
+message TSUStats {
+    repeated HistogramEntry read_waiting_time_histogram = 1;
+    repeated HistogramEntry write_waiting_time_histogram = 2;
+    repeated HistogramEntry erase_waiting_time_histogram = 3;
+
+    double read_waiting_time_mean = 4;
+    double read_waiting_time_stddev = 5;
+    double max_read_waiting_time = 6;
+
+    double write_waiting_time_mean = 7;
+    double write_waiting_time_stddev = 8;
+    double max_write_waiting_time = 9;
+
+    double erase_waiting_time_mean = 10;
+    double erase_waiting_time_stddev = 11;
+    double max_erase_waiting_time = 12;
+
+    uint64 enqueued_read_transactions = 13;
+    uint64 enqueued_write_transactions = 14;
+    uint64 enqueued_erase_transactions = 15;
+}
+
 message SimResult {
     repeated HostQueueStats host_queue_stats = 1;
+    NvmControllerStats nvm_controller_stats = 2;
+    TSUStats tsu_stats = 3;
 }
