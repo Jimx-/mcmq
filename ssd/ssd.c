@@ -45,7 +45,8 @@ static void init_namespaces_from_pb(struct ssd_config* config,
 
     alloc_size =
         ns_count * 4 * (sizeof(unsigned int**) + sizeof(unsigned int)) +
-        count * sizeof(unsigned int);
+        count * sizeof(unsigned int) +
+        ns_count * sizeof(enum plane_allocate_scheme);
     alloc_size = roundup(alloc_size, PG_SIZE);
 
     buf = vmalloc_pages(alloc_size >> PG_SHIFT, NULL);
@@ -64,6 +65,7 @@ static void init_namespaces_from_pb(struct ssd_config* config,
     INIT_ARRAY(die);
     INIT_ARRAY(plane);
 #undef INIT_ARRAY
+    config->plane_allocate_schemes = (enum plane_allocate_scheme*)buf;
 
     for (i = 0; i < ns_count; i++) {
         Mcmq__Namespace* ns = pb_config->namespaces[i];
@@ -83,6 +85,81 @@ static void init_namespaces_from_pb(struct ssd_config* config,
         INIT_IDS(die);
         INIT_IDS(plane);
 #undef INIT_IDS
+
+        switch (ns->plane_allocate_scheme) {
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_CWDP:
+            config->plane_allocate_schemes[i] = PAS_CWDP;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_CWPD:
+            config->plane_allocate_schemes[i] = PAS_CWPD;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_CDWP:
+            config->plane_allocate_schemes[i] = PAS_CDWP;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_CDPW:
+            config->plane_allocate_schemes[i] = PAS_CDPW;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_CPWD:
+            config->plane_allocate_schemes[i] = PAS_CPWD;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_CPDW:
+            config->plane_allocate_schemes[i] = PAS_CPDW;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_WCDP:
+            config->plane_allocate_schemes[i] = PAS_WCDP;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_WCPD:
+            config->plane_allocate_schemes[i] = PAS_WCPD;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_WDCP:
+            config->plane_allocate_schemes[i] = PAS_WDCP;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_WDPC:
+            config->plane_allocate_schemes[i] = PAS_WDPC;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_WPCD:
+            config->plane_allocate_schemes[i] = PAS_WPCD;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_WPDC:
+            config->plane_allocate_schemes[i] = PAS_WPDC;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_DCWP:
+            config->plane_allocate_schemes[i] = PAS_DCWP;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_DCPW:
+            config->plane_allocate_schemes[i] = PAS_DCPW;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_DWCP:
+            config->plane_allocate_schemes[i] = PAS_DWCP;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_DWPC:
+            config->plane_allocate_schemes[i] = PAS_DWPC;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_DPCW:
+            config->plane_allocate_schemes[i] = PAS_DPCW;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_DPWC:
+            config->plane_allocate_schemes[i] = PAS_DPWC;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_PCWD:
+            config->plane_allocate_schemes[i] = PAS_PCWD;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_PCDW:
+            config->plane_allocate_schemes[i] = PAS_PCDW;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_PWCD:
+            config->plane_allocate_schemes[i] = PAS_PWCD;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_PWDC:
+            config->plane_allocate_schemes[i] = PAS_PWDC;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_PDCW:
+            config->plane_allocate_schemes[i] = PAS_PDCW;
+            break;
+        case MCMQ__PLANE_ALLOCATE_SCHEME__PAS_PDWC:
+            config->plane_allocate_schemes[i] = PAS_PDWC;
+            break;
+        }
     }
 }
 
@@ -207,16 +284,17 @@ static void ssd_init_config(struct ssd_config* config)
             config->namespace_count, config->block_selection_policy,
             config->gc_threshold, config->gc_hard_threshold);
 
-    amu_init(
-        config->mapping_table_capacity, config->channel_count,
-        config->nr_chips_per_channel, config->flash_config.nr_dies_per_chip,
-        config->flash_config.nr_planes_per_die,
-        config->flash_config.nr_blocks_per_plane,
-        config->flash_config.nr_pages_per_block,
-        config->flash_config.page_capacity >> SECTOR_SHIFT,
-        config->namespace_count, config->channel_ids, config->channel_id_count,
-        config->chip_ids, config->chip_id_count, config->die_ids,
-        config->die_id_count, config->plane_ids, config->plane_id_count);
+    amu_init(config->mapping_table_capacity, config->channel_count,
+             config->nr_chips_per_channel,
+             config->flash_config.nr_dies_per_chip,
+             config->flash_config.nr_planes_per_die,
+             config->flash_config.nr_blocks_per_plane,
+             config->flash_config.nr_pages_per_block,
+             config->flash_config.page_capacity >> SECTOR_SHIFT,
+             config->namespace_count, config->channel_ids,
+             config->channel_id_count, config->chip_ids, config->chip_id_count,
+             config->die_ids, config->die_id_count, config->plane_ids,
+             config->plane_id_count, config->plane_allocate_schemes);
 
     tsu_init(config->channel_count, config->nr_chips_per_channel,
              config->flash_config.nr_dies_per_chip,
@@ -278,6 +356,83 @@ static void ssd_dump_namespaces(struct ssd_config* config)
         printk("    Planes: ");
         PRINT_IDS(plane);
 #undef PRINT_IDS
+
+        printk("    Plane allocate scheme: ");
+        switch (config->plane_allocate_schemes[i]) {
+        case PAS_CWDP:
+            printk("CWDP");
+            break;
+        case PAS_CWPD:
+            printk("CWPD");
+            break;
+        case PAS_CDWP:
+            printk("CDWP");
+            break;
+        case PAS_CDPW:
+            printk("CDPW");
+            break;
+        case PAS_CPWD:
+            printk("CPWD");
+            break;
+        case PAS_CPDW:
+            printk("CPDW");
+            break;
+        case PAS_WCDP:
+            printk("WCDP");
+            break;
+        case PAS_WCPD:
+            printk("WCPD");
+            break;
+        case PAS_WDCP:
+            printk("WDCP");
+            break;
+        case PAS_WDPC:
+            printk("WDPC");
+            break;
+        case PAS_WPCD:
+            printk("WPCD");
+            break;
+        case PAS_WPDC:
+            printk("WPDC");
+            break;
+        case PAS_DCWP:
+            printk("DCWP");
+            break;
+        case PAS_DCPW:
+            printk("DCPW");
+            break;
+        case PAS_DWCP:
+            printk("DWCP");
+            break;
+        case PAS_DWPC:
+            printk("DWPC");
+            break;
+        case PAS_DPCW:
+            printk("DPCW");
+            break;
+        case PAS_DPWC:
+            printk("DPWC");
+            break;
+        case PAS_PCWD:
+            printk("PCWD");
+            break;
+        case PAS_PCDW:
+            printk("PCDW");
+            break;
+        case PAS_PWCD:
+            printk("PWCD");
+            break;
+        case PAS_PWDC:
+            printk("PWDC");
+            break;
+        case PAS_PDCW:
+            printk("PDCW");
+            break;
+        case PAS_PDWC:
+            printk("PDWC");
+            break;
+        }
+        printk("\n");
     }
 }
 

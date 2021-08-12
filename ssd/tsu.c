@@ -8,6 +8,7 @@
 #include "hdrhistogram/hdr_histogram.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 static struct tsu_stats {

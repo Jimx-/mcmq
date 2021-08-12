@@ -19,7 +19,7 @@ EXTSRCS		= $(patsubst %.c, libfdt/%.c, $(LIBFDT_SRCS)) \
 PROTOFILES      = proto/ssd_config.proto proto/sim_result.proto
 PROTOSRCS		= $(patsubst %.proto, %.pb-c.c, $(PROTOFILES))
 SRCS		= head.S trap.S main.c fdt.c of.c proc.c sched.c vm.c global.c direct_tty.c memory.c \
-				exc.c syscall.c irq.c timer.c user.c gate.S alloc.c slab.c virtio.c blk.c \
+				exc.c irq.c timer.c user.c gate.S alloc.c slab.c virtio.c blk.c \
 				pci.c smp.c virtio_mmio.c virtio_pci.c vsock.c ivshmem.c ringbuf.c\
 				ssd/ssd.c ssd/hostif.c ssd/hostif_nvme.c ssd/worker.c ssd/data_cache.c ssd/amu.c \
 				ssd/block_manager.c ssd/tsu.c ssd/nvm_ctlr.c \

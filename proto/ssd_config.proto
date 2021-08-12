@@ -23,7 +23,7 @@ message FlashConfig {
     uint32 nr_planes_per_die = 10;
     uint32 nr_blocks_per_plane = 11;
     uint32 nr_pages_per_block = 12;
-    uint32 page_capacity = 13;
+    uint32 page_capacity = 13; 
 }
 
 enum CacheMode {
@@ -35,11 +35,39 @@ enum BlockSelectionPolicy {
     BSP_GREEDY = 0;
 }
 
+enum PlaneAllocateScheme {
+    PAS_CWDP = 0;
+    PAS_CWPD = 1;
+    PAS_CDWP = 2;
+    PAS_CDPW = 3;
+    PAS_CPWD = 4;
+    PAS_CPDW = 5;
+    PAS_WCDP = 6;
+    PAS_WCPD = 7;
+    PAS_WDCP = 8;
+    PAS_WDPC = 9;
+    PAS_WPCD = 10;
+    PAS_WPDC = 11;
+    PAS_DCWP = 12;
+    PAS_DCPW = 13;
+    PAS_DWCP = 14;
+    PAS_DWPC = 15;
+    PAS_DPCW = 16;
+    PAS_DPWC = 17;
+    PAS_PCWD = 18;
+    PAS_PCDW = 19;
+    PAS_PWCD = 20;
+    PAS_PWDC = 21;
+    PAS_PDCW = 22;
+    PAS_PDWC = 23;
+}
+
 message Namespace {
     repeated uint32 channel_ids = 1;
-    repeated uint32 chip_ids = 2;
+    repeated uint32 chip_ids = 2;    
     repeated uint32 die_ids = 3;
     repeated uint32 plane_ids = 4;
+    PlaneAllocateScheme plane_allocate_scheme = 5;
 }
 
 message SsdConfig {

@@ -48,6 +48,33 @@ enum block_selection_policy {
     BSP_FIFO,
 };
 
+enum plane_allocate_scheme {
+    PAS_CWDP,
+    PAS_CWPD,
+    PAS_CDWP,
+    PAS_CDPW,
+    PAS_CPWD,
+    PAS_CPDW,
+    PAS_WCDP,
+    PAS_WCPD,
+    PAS_WDCP,
+    PAS_WDPC,
+    PAS_WPCD,
+    PAS_WPDC,
+    PAS_DCWP,
+    PAS_DCPW,
+    PAS_DWCP,
+    PAS_DWPC,
+    PAS_DPCW,
+    PAS_DPWC,
+    PAS_PCWD,
+    PAS_PCDW,
+    PAS_PWCD,
+    PAS_PWDC,
+    PAS_PDCW,
+    PAS_PDWC,
+};
+
 struct ssd_config {
     unsigned int seed;
     enum cache_mode cache_mode;
@@ -70,6 +97,7 @@ struct ssd_config {
     unsigned int* die_id_count;
     unsigned int** plane_ids;
     unsigned int* plane_id_count;
+    enum plane_allocate_scheme* plane_allocate_schemes;
 
     struct flash_config flash_config;
 };
@@ -106,7 +134,8 @@ void amu_init(size_t mt_capacity, unsigned int nr_channels,
               unsigned int* channel_id_count, unsigned int** chip_ids,
               unsigned int* chip_id_count, unsigned int** die_ids,
               unsigned int* die_id_count, unsigned int** plane_ids,
-              unsigned int* plane_id_count);
+              unsigned int* plane_id_count,
+              enum plane_allocate_scheme* plane_allocate_schemes);
 void amu_dispatch(struct user_request* req);
 void amu_transaction_complete(struct flash_transaction* txn);
 ppa_t address_to_ppa(struct flash_address* addr);

@@ -75,6 +75,7 @@ struct gmt_entry {
 
 struct am_domain {
     unsigned int nsid;
+    enum plane_allocate_scheme plane_allocate_scheme;
     struct mapping_table table;
     struct gtd_entry* gtd;
     struct gmt_entry* gmt;
@@ -392,6 +393,7 @@ queue_locked_mapping_transaction(struct am_domain* domain,
 
 static void assign_plane(struct flash_transaction* txn)
 {
+    struct am_domain* domain = domain_get(txn);
     struct flash_address* addr = &txn->addr;
     lpa_t lpa = txn->lpa;
     int nsid = txn->nsid - 1;
@@ -406,16 +408,95 @@ static void assign_plane(struct flash_transaction* txn)
 
     assert(txn->nsid > 0 && txn->nsid <= namespace_count);
 
-#define ASSIGN_PHYS_ADDR(lpa, name)                      \
-    do {                                                 \
-        addr->name##_id = name##_id[lpa % name##_count]; \
-        lpa = lpa / name##_count;                        \
+#define ASSIGN_PHYS_ADDR(lpa, name)                        \
+    do {                                                   \
+        addr->name##_id = name##_id[(lpa) % name##_count]; \
+        (lpa) = (lpa) / name##_count;                      \
     } while (0)
 
-    ASSIGN_PHYS_ADDR(lpa, channel);
-    ASSIGN_PHYS_ADDR(lpa, chip);
-    ASSIGN_PHYS_ADDR(lpa, die);
-    ASSIGN_PHYS_ADDR(lpa, plane);
+#define ASSIGN_PLANE(lpa, first, second, third, fourth) \
+    do {                                                \
+        ASSIGN_PHYS_ADDR(lpa, first);                   \
+        ASSIGN_PHYS_ADDR(lpa, second);                  \
+        ASSIGN_PHYS_ADDR(lpa, third);                   \
+        ASSIGN_PHYS_ADDR(lpa, fourth);                  \
+    } while (0)
+
+    switch (domain->plane_allocate_scheme) {
+    case PAS_CWDP:
+        ASSIGN_PLANE(lpa, channel, chip, die, plane);
+        break;
+    case PAS_CWPD:
+        ASSIGN_PLANE(lpa, channel, chip, plane, die);
+        break;
+    case PAS_CDWP:
+        ASSIGN_PLANE(lpa, channel, die, chip, plane);
+        break;
+    case PAS_CDPW:
+        ASSIGN_PLANE(lpa, channel, die, plane, chip);
+        break;
+    case PAS_CPWD:
+        ASSIGN_PLANE(lpa, channel, plane, chip, die);
+        break;
+    case PAS_CPDW:
+        ASSIGN_PLANE(lpa, channel, plane, die, chip);
+        break;
+    case PAS_WCDP:
+        ASSIGN_PLANE(lpa, chip, channel, die, plane);
+        break;
+    case PAS_WCPD:
+        ASSIGN_PLANE(lpa, chip, channel, plane, die);
+        break;
+    case PAS_WDCP:
+        ASSIGN_PLANE(lpa, chip, die, channel, plane);
+        break;
+    case PAS_WDPC:
+        ASSIGN_PLANE(lpa, chip, die, plane, channel);
+        break;
+    case PAS_WPCD:
+        ASSIGN_PLANE(lpa, chip, plane, channel, die);
+        break;
+    case PAS_WPDC:
+        ASSIGN_PLANE(lpa, chip, plane, die, channel);
+        break;
+    case PAS_DCWP:
+        ASSIGN_PLANE(lpa, die, channel, chip, plane);
+        break;
+    case PAS_DCPW:
+        ASSIGN_PLANE(lpa, die, channel, plane, chip);
+        break;
+    case PAS_DWCP:
+        ASSIGN_PLANE(lpa, die, chip, channel, plane);
+        break;
+    case PAS_DWPC:
+        ASSIGN_PLANE(lpa, die, chip, plane, channel);
+        break;
+    case PAS_DPCW:
+        ASSIGN_PLANE(lpa, die, plane, channel, chip);
+        break;
+    case PAS_DPWC:
+        ASSIGN_PLANE(lpa, die, plane, chip, channel);
+        break;
+    case PAS_PCWD:
+        ASSIGN_PLANE(lpa, plane, channel, chip, die);
+        break;
+    case PAS_PCDW:
+        ASSIGN_PLANE(lpa, plane, channel, die, chip);
+        break;
+    case PAS_PWCD:
+        ASSIGN_PLANE(lpa, plane, chip, channel, die);
+        break;
+    case PAS_PWDC:
+        ASSIGN_PLANE(lpa, plane, chip, die, channel);
+        break;
+    case PAS_PDCW:
+        ASSIGN_PLANE(lpa, plane, die, channel, chip);
+        break;
+    case PAS_PDWC:
+        ASSIGN_PLANE(lpa, plane, die, chip, channel);
+        break;
+    }
+#undef ASSIGN_PLANE
 #undef ASSIGN_PHYS_ADDR
 }
 
@@ -777,7 +858,8 @@ static void translate_transaction(struct flash_transaction* txn)
 static void domain_init(struct am_domain* domain, unsigned int nsid,
                         size_t capacity, unsigned int gtd_entry_size,
                         size_t translation_entries_per_page,
-                        lha_t total_logical_sectors)
+                        lha_t total_logical_sectors,
+                        enum plane_allocate_scheme scheme)
 {
     size_t total_logical_pages = total_logical_sectors / sectors_per_page;
     size_t total_translation_pages =
@@ -790,6 +872,7 @@ static void domain_init(struct am_domain* domain, unsigned int nsid,
     memset(domain, 0, sizeof(*domain));
 
     domain->nsid = nsid;
+    domain->plane_allocate_scheme = scheme;
 
     mt_init(&domain->table, capacity);
     spin_lock_init(&domain->lock);
@@ -834,7 +917,8 @@ void amu_init(size_t mt_capacity, unsigned int nr_channels,
               unsigned int* nr_channel_ids, unsigned int** chip_id_list,
               unsigned int* nr_chip_ids, unsigned int** die_id_list,
               unsigned int* nr_die_ids, unsigned int** plane_id_list,
-              unsigned int* nr_plane_ids)
+              unsigned int* nr_plane_ids,
+              enum plane_allocate_scheme* plane_allocate_schemes)
 {
     int i;
     size_t alloc_size;
@@ -870,7 +954,8 @@ void amu_init(size_t mt_capacity, unsigned int nr_channels,
     for (i = 0; i < namespace_count; i++)
         domain_init(&domains[i], i + 1, mt_capacity, 4,
                     (sectors_per_page * SECTOR_SIZE) >> 2,
-                    pages_per_channel * sectors_per_page);
+                    pages_per_channel * sectors_per_page,
+                    plane_allocate_schemes[i]);
 }
 
 void amu_dispatch(struct user_request* req)

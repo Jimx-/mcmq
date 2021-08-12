@@ -24,8 +24,6 @@
 
 #define BLOCK_SIZE 0x1000
 
-#define PATH_MAX 256
-
 #define VSOCK_HOST_CID 2
 #define VSOCK_HOST_PORT 9999
 
