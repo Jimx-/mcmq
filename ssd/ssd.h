@@ -185,6 +185,8 @@ void nvm_ctlr_dispatch(struct list_head* txn_list);
 enum bus_status nvm_ctlr_get_channel_status(unsigned int channel);
 enum chip_status nvm_ctlr_get_chip_status(unsigned int channel,
                                           unsigned int chip);
+int nvm_ctlr_is_die_busy(unsigned int channel, unsigned int chip,
+                         unsigned int die);
 void nvm_ctlr_timer_interrupt(void);
 void nvm_ctlr_get_metadata(struct flash_address* addr,
                            struct page_metadata* metadata);

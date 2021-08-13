@@ -71,6 +71,8 @@ struct chip_data {
     struct die_data* current_xfer;
     time_ns_t xfer_complete_time;
     unsigned int nr_waiting_read_xfers;
+
+    time_ns_t last_xfer_start;
 };
 
 static unsigned int channel_count, chips_per_channel, dies_per_chip,
@@ -316,6 +318,14 @@ enum chip_status nvm_ctlr_get_chip_status(unsigned int channel,
     return chip_data[channel][chip].status;
 }
 
+int nvm_ctlr_is_die_busy(unsigned int channel, unsigned int chip,
+                         unsigned int die)
+{
+    assert(channel < channel_count && chip < chips_per_channel &&
+           die < dies_per_chip);
+    return chip_data[channel][chip].dies[die].active_cmd != NULL;
+}
+
 static void rearm_timer(void)
 {
     int i, j, k;
@@ -359,7 +369,7 @@ static int start_cmd_data_transfer(struct chip_data* chip)
     struct die_data* die;
     time_ns_t now;
 
-    if (chip->status != CS_IDLE) return FALSE;
+    /* if (chip->status != CS_IDLE) return FALSE; */
     assert(!chip->current_xfer);
 
     if (list_empty(&chip->cmd_xfer_queue)) return FALSE;
@@ -391,6 +401,7 @@ static int start_data_out_transfer(struct channel_data* channel)
                          struct flash_transaction, waiting_list);
 
     if (!txn) return FALSE;
+
     list_del(&txn->waiting_list);
 
     chip = &chip_data[channel->channel_id][txn->addr.chip_id];
@@ -444,7 +455,7 @@ static void dispatch_write(struct channel_data* channel, struct chip_data* chip,
 
     list_for_each_entry(txn, &die->active_txns, queue)
     {
-        transfer_time += nvddr2_data_out_transfer_time(channel, txn->length);
+        transfer_time += nvddr2_data_in_transfer_time(channel, txn->length);
     }
 
     die->data_transfer_time = transfer_time;
@@ -670,6 +681,7 @@ static void complete_data_out_transfer(struct chip_data* chip,
     }
 
     set_channel_status(chip->channel, BUS_IDLE);
+    tsu_notify_channel_idle(chip->channel->channel_id);
 }
 
 static void check_completion(void)

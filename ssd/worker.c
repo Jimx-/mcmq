@@ -138,7 +138,6 @@ void process_worker_queue(void)
     unsigned int self = smp_processor_id();
 
     while (dequeue_event(&event)) {
-
         if (self == THREAD_TSU) {
             switch (event.type) {
             case EVENT_FLASH_TRANSACTION:

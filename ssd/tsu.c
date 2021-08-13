@@ -147,18 +147,30 @@ static int transaction_ready(struct flash_transaction* txn)
     }
 }
 
-static void dispatch_queue_request(struct list_head* q_prim,
-                                   struct list_head* q_sec, enum txn_type type)
+static int dispatch_queue_request(struct list_head* q_prim,
+                                  struct list_head* q_sec, enum txn_type type)
 {
-    struct flash_transaction* head =
-        list_entry(q_prim->next, struct flash_transaction, queue);
-    unsigned int die_id = head->addr.die_id;
-    unsigned int page_id = head->addr.page_id;
+    struct flash_transaction* head = NULL;
+    unsigned int die_id;
+    unsigned int page_id;
     struct list_head dispatch_list;
 
     struct flash_transaction *txn, *tmp;
     uint64_t plane_bitmap = 0;
     int found = 0;
+
+    list_for_each_entry(txn, q_prim, queue)
+    {
+        if (!nvm_ctlr_is_die_busy(txn->addr.channel_id, txn->addr.chip_id,
+                                  txn->addr.die_id)) {
+            head = txn;
+            die_id = head->addr.die_id;
+            page_id = head->addr.page_id;
+            break;
+        }
+    }
+
+    if (!head) return FALSE;
 
     INIT_LIST_HEAD(&dispatch_list);
 
@@ -187,7 +199,12 @@ static void dispatch_queue_request(struct list_head* q_prim,
         }
     }
 
-    if (!list_empty(&dispatch_list)) nvm_ctlr_dispatch(&dispatch_list);
+    if (!list_empty(&dispatch_list)) {
+        nvm_ctlr_dispatch(&dispatch_list);
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 static int dispatch_read_request(unsigned int channel, unsigned int chip)
@@ -217,10 +234,9 @@ static int dispatch_read_request(unsigned int channel, unsigned int chip)
             return FALSE;
     }
 
-    if (nvm_ctlr_get_chip_status(channel, chip) != CS_IDLE) return FALSE;
+    /* if (nvm_ctlr_get_chip_status(channel, chip) != CS_IDLE) return FALSE; */
 
-    dispatch_queue_request(q_prim, q_sec, TXN_READ);
-    return TRUE;
+    return dispatch_queue_request(q_prim, q_sec, TXN_READ);
 }
 
 static int dispatch_write_request(unsigned int channel, unsigned int chip)
@@ -248,10 +264,9 @@ static int dispatch_write_request(unsigned int channel, unsigned int chip)
             return FALSE;
     }
 
-    if (nvm_ctlr_get_chip_status(channel, chip) != CS_IDLE) return FALSE;
+    /* if (nvm_ctlr_get_chip_status(channel, chip) != CS_IDLE) return FALSE; */
 
-    dispatch_queue_request(q_prim, q_sec, TXN_WRITE);
-    return TRUE;
+    return dispatch_queue_request(q_prim, q_sec, TXN_WRITE);
 }
 
 static int dispatch_erase_request(unsigned int channel, unsigned int chip)
@@ -259,12 +274,11 @@ static int dispatch_erase_request(unsigned int channel, unsigned int chip)
     struct txn_queues* queues = &chip_queues[channel][chip];
     struct list_head* q_prim = &queues->gc_erase_queue;
 
-    if (nvm_ctlr_get_chip_status(channel, chip) != CS_IDLE) return FALSE;
+    /* if (nvm_ctlr_get_chip_status(channel, chip) != CS_IDLE) return FALSE; */
 
     if (list_empty(q_prim)) return FALSE;
 
-    dispatch_queue_request(q_prim, NULL, TXN_ERASE);
-    return TRUE;
+    return dispatch_queue_request(q_prim, NULL, TXN_ERASE);
 }
 
 static void dispatch_request(unsigned int channel, unsigned int chip)
@@ -277,6 +291,7 @@ static void dispatch_request(unsigned int channel, unsigned int chip)
 static void tsu_flush_channel(unsigned int channel)
 {
     int i;
+
     for (i = 0; i < chips_per_channel; i++) {
         unsigned int chip_id = channel_rr_index[channel];
         dispatch_request(channel, chip_id);
