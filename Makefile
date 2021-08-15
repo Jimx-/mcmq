@@ -50,7 +50,7 @@ qemu :
 	@$(QEMU) -smp 8 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -nographic
 
 qemudbg :
-	@$(QEMU) -smp 4 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -monitor stdio -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -s -S
+	@$(QEMU) -smp 8 -m 8G -M virt -kernel bbl -drive id=disk0,file=HD,if=none,format=raw -device virtio-blk-device,drive=disk0 -bios none -device ivshmem-plain,memdev=hostmem -object memory-backend-file,size=128M,share=on,mem-path=/dev/shm/ivshmem,id=hostmem -device vhost-vsock-pci,guest-cid=3 -nographic -s -S
 
 clean :
 	rm $(KERNEL)

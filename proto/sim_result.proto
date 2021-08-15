@@ -10,7 +10,7 @@ message HistogramEntry {
 
 message HostQueueStats {
     uint32 queue_id = 1;
-    
+
     repeated HistogramEntry read_request_turnaround_time_histogram = 2;
     repeated HistogramEntry write_request_turnaround_time_histogram = 3;
 
@@ -26,20 +26,29 @@ message HostQueueStats {
     uint64 write_request_count = 11;
 }
 
+message ChipStats {
+    uint32 channel_id = 1;
+    uint32 chip_id = 2;
+    uint64 total_transfer_time = 3;
+    uint64 total_execution_time = 4;
+}
+
 message NvmControllerStats {
     uint64 read_command_count = 1;
     uint64 multiplane_read_command_count = 2;
     uint64 program_command_count = 3;
     uint64 multiplane_program_command_count = 4;
     uint64 erase_command_count = 5;
-    uint64 multiplane_erase_command_count = 6;    
+    uint64 multiplane_erase_command_count = 6;
+
+    repeated ChipStats chip_stats = 7;
 }
 
 message TSUStats {
     repeated HistogramEntry read_waiting_time_histogram = 1;
     repeated HistogramEntry write_waiting_time_histogram = 2;
     repeated HistogramEntry erase_waiting_time_histogram = 3;
-
+    
     double read_waiting_time_mean = 4;
     double read_waiting_time_stddev = 5;
     double max_read_waiting_time = 6;
@@ -55,6 +64,27 @@ message TSUStats {
     uint64 enqueued_read_transactions = 13;
     uint64 enqueued_write_transactions = 14;
     uint64 enqueued_erase_transactions = 15;
+
+    repeated HistogramEntry read_transfer_time_histogram = 16;
+    repeated HistogramEntry read_execution_time_histogram = 17;
+    repeated HistogramEntry write_transfer_time_histogram = 18;
+    repeated HistogramEntry write_execution_time_histogram = 19;
+
+    double read_transfer_time_mean = 20;
+    double read_transfer_time_stddev = 21;
+    double max_read_transfer_time = 22;
+
+    double read_execution_time_mean = 23;
+    double read_execution_time_stddev = 24;
+    double max_read_execution_time = 25;
+
+    double write_transfer_time_mean = 26;
+    double write_transfer_time_stddev = 27;
+    double max_write_transfer_time = 28;
+
+    double write_execution_time_mean = 29;
+    double write_execution_time_stddev = 30;
+    double max_write_execution_time = 31;
 }
 
 message SimResult {

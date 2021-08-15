@@ -60,6 +60,8 @@ struct flash_transaction {
 
     time_ns_t enqueue_time;
     time_ns_t dispatch_time;
+    time_ns_t total_xfer_time;
+    time_ns_t total_exec_time;
 };
 
 enum flash_technology {

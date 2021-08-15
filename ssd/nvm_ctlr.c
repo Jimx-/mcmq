@@ -4,6 +4,7 @@
 #include "ssd.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 struct nvm_ctlr_stats {
@@ -53,6 +54,8 @@ struct die_data {
 
     struct flash_transaction* active_xfer;
     time_ns_t xfer_complete_time;
+
+    time_ns_t exec_start_time;
 };
 
 struct chip_data {
@@ -73,6 +76,11 @@ struct chip_data {
     unsigned int nr_waiting_read_xfers;
 
     time_ns_t last_xfer_start;
+    time_ns_t exec_start_time;
+
+    time_ns_t total_xfer_time;
+    time_ns_t total_exec_time;
+    time_ns_t total_overlapped_time;
 };
 
 static unsigned int channel_count, chips_per_channel, dies_per_chip,
@@ -185,6 +193,8 @@ static void init_die(struct die_data* die)
 
     INIT_LIST_HEAD(&die->active_txns);
 
+    die->exec_start_time = INVALID_TIME;
+
     for (i = 0; i < planes_per_die; i++)
         init_plane(&die->planes[i]);
 }
@@ -206,6 +216,9 @@ static void init_chip(struct chip_data* chip)
 
     INIT_LIST_HEAD(&chip->cmd_xfer_queue);
     set_chip_status(chip, CS_IDLE);
+
+    chip->last_xfer_start = INVALID_TIME;
+    chip->exec_start_time = INVALID_TIME;
 
     for (i = 0; i < dies_per_chip; i++)
         init_die(&chip->dies[i]);
@@ -380,6 +393,7 @@ static int start_cmd_data_transfer(struct chip_data* chip)
     now = current_time_ns();
     set_chip_status(chip, CS_CMD_DATA_IN);
     chip->current_xfer = die;
+    chip->last_xfer_start = now;
     chip->xfer_complete_time = now + die->data_transfer_time;
 
     if (!die->data_transfer_time) complete_chip_transfer(chip);
@@ -411,6 +425,7 @@ static int start_data_out_transfer(struct channel_data* channel)
     now = current_time_ns();
     set_chip_status(chip, CS_DATA_OUT);
     die->active_xfer = txn;
+    chip->last_xfer_start = now;
     die->xfer_complete_time =
         now + nvddr2_data_out_transfer_time(channel, txn->length);
     set_channel_status(channel, BUS_BUSY);
@@ -429,9 +444,12 @@ static int start_die_command(struct chip_data* chip, struct flash_command* cmd)
                cmd->cmd_code != CMD_ERASE_BLOCK);
 
     now = current_time_ns();
+    die->exec_start_time = now;
     die->cmd_finish_time =
         now + get_command_latency(chip, cmd->cmd_code, cmd->addrs[0].page_id);
     die->current_cmd = cmd;
+
+    if (!chip->active_dies) chip->exec_start_time = now;
     chip->active_dies++;
 
     return TRUE;
@@ -556,11 +574,23 @@ void nvm_ctlr_dispatch(struct list_head* txn_list)
 static void complete_chip_transfer(struct chip_data* chip)
 {
     struct die_data* die = chip->current_xfer;
-    struct flash_transaction* head =
-        list_entry(die->active_txns.next, struct flash_transaction, queue);
+    struct flash_transaction *txn,
+        *head =
+            list_entry(die->active_txns.next, struct flash_transaction, queue);
     struct channel_data* channel = &channel_data[head->addr.channel_id];
+    time_ns_t xfer_time;
 
     assert(!list_empty(&die->active_txns));
+
+    xfer_time = current_time_ns() - chip->last_xfer_start;
+    chip->last_xfer_start = INVALID_TIME;
+    chip->total_xfer_time += xfer_time;
+    if (chip->active_dies) chip->total_overlapped_time += xfer_time;
+
+    list_for_each_entry(txn, &die->active_txns, queue)
+    {
+        txn->total_xfer_time += xfer_time;
+    }
 
     chip->current_xfer = NULL;
 
@@ -591,7 +621,21 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
 {
     struct flash_command* cmd = die->current_cmd;
     struct flash_transaction *txn, *tmp;
+    time_ns_t now, exec_time;
     int i;
+
+    now = current_time_ns();
+
+    chip->active_dies--;
+    if (!chip->active_dies) {
+        chip->total_exec_time += now - chip->exec_start_time;
+        if (chip->last_xfer_start != INVALID_TIME)
+            chip->total_overlapped_time += now - chip->last_xfer_start;
+        chip->exec_start_time = INVALID_TIME;
+    }
+
+    exec_time = now - die->exec_start_time;
+    die->exec_start_time = INVALID_TIME;
 
     die->current_cmd = NULL;
     die->cmd_finish_time = UINT64_MAX;
@@ -602,10 +646,11 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
         for (i = 0; i < cmd->nr_addrs; i++)
             get_metadata(&cmd->addrs[i], &cmd->metadata[i]);
 
-        if (!--chip->active_dies) set_chip_status(chip, CS_WAIT_FOR_DATA_OUT);
+        if (!chip->active_dies) set_chip_status(chip, CS_WAIT_FOR_DATA_OUT);
 
         list_for_each_entry(txn, &die->active_txns, queue)
         {
+            txn->total_exec_time += exec_time;
             chip->nr_waiting_read_xfers++;
             list_add(&txn->waiting_list, &chip->channel->waiting_read_xfer);
         }
@@ -623,24 +668,26 @@ static void complete_die_command(struct chip_data* chip, struct die_data* die)
                txn gets immediately notified and it may release txn before we
                continue to the next txn in the list so list_for_each_entry_safe
                is needed. */
+            txn->total_exec_time += exec_time;
             notify_transaction_complete(txn);
         }
         INIT_LIST_HEAD(&die->active_txns);
         die->active_cmd = NULL;
 
-        if (!--chip->active_dies) set_chip_status(chip, CS_IDLE);
+        if (!chip->active_dies) set_chip_status(chip, CS_IDLE);
         break;
     case CMD_ERASE_BLOCK:
     case CMD_ERASE_BLOCK_MULTIPLANE:
         list_for_each_entry_safe(txn, tmp, &die->active_txns, queue)
         {
+            txn->total_exec_time += exec_time;
             notify_transaction_complete(txn);
         }
 
         INIT_LIST_HEAD(&die->active_txns);
         die->active_cmd = NULL;
 
-        if (!--chip->active_dies) set_chip_status(chip, CS_IDLE);
+        if (!chip->active_dies) set_chip_status(chip, CS_IDLE);
         break;
     }
 
@@ -655,7 +702,14 @@ static void complete_data_out_transfer(struct chip_data* chip,
 {
     struct flash_transaction* txn = die->active_xfer;
     struct flash_command* cmd = die->active_cmd;
+    time_ns_t xfer_time;
     int i;
+
+    xfer_time = current_time_ns() - chip->last_xfer_start;
+    chip->last_xfer_start = INVALID_TIME;
+    chip->total_xfer_time += xfer_time;
+    if (chip->active_dies) chip->total_overlapped_time += xfer_time;
+    txn->total_xfer_time += xfer_time;
 
     die->active_xfer = NULL;
     die->xfer_complete_time = UINT64_MAX;
@@ -766,11 +820,30 @@ void nvm_ctlr_timer_interrupt(void)
 
 void nvm_ctlr_report_result(Mcmq__SimResult* result)
 {
+    int i;
     struct Mcmq__NvmControllerStats* nvm_ctlr_stats =
         malloc(sizeof(Mcmq__NvmControllerStats));
 
     mcmq__nvm_controller_stats__init(nvm_ctlr_stats);
     result->nvm_controller_stats = nvm_ctlr_stats;
+
+    nvm_ctlr_stats->n_chip_stats = channel_count * chips_per_channel;
+    nvm_ctlr_stats->chip_stats =
+        calloc(channel_count * chips_per_channel, sizeof(Mcmq__ChipStats*));
+
+    for (i = 0; i < channel_count * chips_per_channel; i++) {
+        struct chip_data* chip =
+            &chip_data[i / chips_per_channel][i % chips_per_channel];
+        struct Mcmq__ChipStats* chip_stats = malloc(sizeof(Mcmq__ChipStats));
+
+        nvm_ctlr_stats->chip_stats[i] = chip_stats;
+        mcmq__chip_stats__init(chip_stats);
+
+        chip_stats->channel_id = chip->channel->channel_id;
+        chip_stats->chip_id = chip->chip_id;
+        chip_stats->total_transfer_time = chip->total_xfer_time / 1000;
+        chip_stats->total_execution_time = chip->total_exec_time / 1000;
+    }
 
     nvm_ctlr_stats->read_command_count = stats.read_cmds;
     nvm_ctlr_stats->multiplane_read_command_count = stats.multiplane_read_cmds;

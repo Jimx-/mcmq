@@ -19,6 +19,12 @@ static struct tsu_stats {
     struct hdr_histogram* read_waiting_time_hist;
     struct hdr_histogram* write_waiting_time_hist;
     struct hdr_histogram* erase_waiting_time_hist;
+
+    struct hdr_histogram* read_transfer_time_hist;
+    struct hdr_histogram* write_transfer_time_hist;
+
+    struct hdr_histogram* read_execution_time_hist;
+    struct hdr_histogram* write_execution_time_hist;
 } stats;
 
 struct txn_queues {
@@ -337,26 +343,36 @@ void tsu_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
     hdr_init(1, UINT64_C(2000000), 1, &stats.read_waiting_time_hist);
     hdr_init(1, UINT64_C(2000000), 1, &stats.write_waiting_time_hist);
     hdr_init(1, UINT64_C(2000000), 1, &stats.erase_waiting_time_hist);
+    hdr_init(1, UINT64_C(2000000), 1, &stats.read_transfer_time_hist);
+    hdr_init(1, UINT64_C(2000000), 1, &stats.write_transfer_time_hist);
+    hdr_init(1, UINT64_C(2000000), 1, &stats.read_execution_time_hist);
+    hdr_init(1, UINT64_C(2000000), 1, &stats.write_execution_time_hist);
 }
 
 void tsu_transaction_complete(struct flash_transaction* txn)
 {
-    time_ns_t delta = txn->dispatch_time - txn->enqueue_time;
-    struct hdr_histogram* hist;
+    time_ns_t waiting_time = txn->dispatch_time - txn->enqueue_time;
+    struct hdr_histogram *waiting_hist, *xfer_hist = NULL, *exec_hist = NULL;
 
     switch (txn->type) {
     case TXN_READ:
-        hist = stats.read_waiting_time_hist;
+        waiting_hist = stats.read_waiting_time_hist;
+        xfer_hist = stats.read_transfer_time_hist;
+        exec_hist = stats.read_execution_time_hist;
         break;
     case TXN_WRITE:
-        hist = stats.write_waiting_time_hist;
+        waiting_hist = stats.write_waiting_time_hist;
+        xfer_hist = stats.write_transfer_time_hist;
+        exec_hist = stats.write_execution_time_hist;
         break;
     case TXN_ERASE:
-        hist = stats.erase_waiting_time_hist;
+        waiting_hist = stats.erase_waiting_time_hist;
         break;
     }
 
-    hdr_record_value(hist, delta / 1000);
+    hdr_record_value(waiting_hist, waiting_time / 1000);
+    if (xfer_hist) hdr_record_value(xfer_hist, txn->total_xfer_time / 1000);
+    if (exec_hist) hdr_record_value(exec_hist, txn->total_exec_time / 1000);
 }
 
 void tsu_report_result(Mcmq__SimResult* result)
@@ -372,30 +388,27 @@ void tsu_report_result(Mcmq__SimResult* result)
         struct hdr_iter iter;                                               \
         struct hdr_iter_percentiles* percentiles;                           \
         int j, count = 0;                                                   \
-        tsu_stats->name##_waiting_time_mean =                               \
-            hdr_mean(stats.name##_waiting_time_hist);                       \
-        tsu_stats->name##_waiting_time_stddev =                             \
-            hdr_stddev(stats.name##_waiting_time_hist);                     \
-        tsu_stats->max_##name##_waiting_time =                              \
-            hdr_max(stats.name##_waiting_time_hist);                        \
-        hdr_iter_percentile_init(&iter, stats.name##_waiting_time_hist,     \
+        tsu_stats->name##_time_mean = hdr_mean(stats.name##_time_hist);     \
+        tsu_stats->name##_time_stddev = hdr_stddev(stats.name##_time_hist); \
+        tsu_stats->max_##name##_time = hdr_max(stats.name##_time_hist);     \
+        hdr_iter_percentile_init(&iter, stats.name##_time_hist,             \
                                  ticks_per_half_distance);                  \
         while (hdr_iter_next(&iter)) {                                      \
             count++;                                                        \
         }                                                                   \
-        tsu_stats->n_##name##_waiting_time_histogram = count;               \
+        tsu_stats->n_##name##_time_histogram = count;                       \
         if (count) {                                                        \
-            tsu_stats->name##_waiting_time_histogram =                      \
+            tsu_stats->name##_time_histogram =                              \
                 calloc(count, sizeof(Mcmq__HistogramEntry*));               \
             j = 0;                                                          \
-            hdr_iter_percentile_init(&iter, stats.name##_waiting_time_hist, \
+            hdr_iter_percentile_init(&iter, stats.name##_time_hist,         \
                                      ticks_per_half_distance);              \
             while (hdr_iter_next(&iter) && j < count) {                     \
                 struct Mcmq__HistogramEntry* entry =                        \
                     malloc(sizeof(Mcmq__HistogramEntry));                   \
                 percentiles = &iter.specifics.percentiles;                  \
                 mcmq__histogram_entry__init(entry);                         \
-                tsu_stats->name##_waiting_time_histogram[j] = entry;        \
+                tsu_stats->name##_time_histogram[j] = entry;                \
                 entry->value = iter.highest_equivalent_value;               \
                 entry->percentile = percentiles->percentile;                \
                 entry->total_count = iter.cumulative_count;                 \
@@ -404,9 +417,14 @@ void tsu_report_result(Mcmq__SimResult* result)
         }                                                                   \
     } while (0)
 
-    SET_LATENCY_HISTOGRAM(read);
-    SET_LATENCY_HISTOGRAM(write);
-    SET_LATENCY_HISTOGRAM(erase);
+    SET_LATENCY_HISTOGRAM(read_waiting);
+    SET_LATENCY_HISTOGRAM(write_waiting);
+    SET_LATENCY_HISTOGRAM(erase_waiting);
+
+    SET_LATENCY_HISTOGRAM(read_transfer);
+    SET_LATENCY_HISTOGRAM(read_execution);
+    SET_LATENCY_HISTOGRAM(write_transfer);
+    SET_LATENCY_HISTOGRAM(write_execution);
 
     tsu_stats->enqueued_read_transactions = stats.enqueued_read_txns;
     tsu_stats->enqueued_write_transactions = stats.enqueued_write_txns;
