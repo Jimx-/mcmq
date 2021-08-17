@@ -1,3 +1,4 @@
+#include "avl.h"
 #include "const.h"
 #include "flash.h"
 #include "proto.h"
@@ -40,11 +41,16 @@ struct plane_data {
     struct block_data* blocks;
 };
 
+struct chip_data;
+
 struct die_data {
     struct list_head list;
     struct list_head active_txns;
+    struct list_head completion;
+    struct avl_node avl;
     time_ns_t data_transfer_time;
 
+    struct chip_data* chip;
     struct plane_data* planes;
 
     struct flash_command cmd_buf;
@@ -59,6 +65,8 @@ struct die_data {
 };
 
 struct chip_data {
+    struct avl_node avl;
+    struct list_head completion;
     unsigned int chip_id;
     struct channel_data* channel;
     enum flash_technology technology;
@@ -89,6 +97,10 @@ static unsigned int channel_count, chips_per_channel, dies_per_chip,
 static struct chip_data** chip_data;
 static struct channel_data* channel_data;
 
+static struct avl_root chip_transfer_avl;
+static struct avl_root die_command_avl;
+static struct avl_root die_transfer_avl;
+
 static void complete_chip_transfer(struct chip_data* chip);
 
 static inline time_ns_t
@@ -101,6 +113,93 @@ static inline time_ns_t
 nvddr2_data_out_transfer_time(struct channel_data* channel, size_t size)
 {
     return (size / channel->channel_width / 2) * channel->t_DSC;
+}
+
+static int chip_transfer_key_node_comp(void* key, struct avl_node* node)
+{
+    struct chip_data* r1 = (struct chip_data*)key;
+    struct chip_data* r2 = avl_entry(node, struct chip_data, avl);
+
+    if (r1->xfer_complete_time < r2->xfer_complete_time)
+        return -1;
+    else if (r1->xfer_complete_time > r2->xfer_complete_time)
+        return 1;
+    return 0;
+}
+
+static int chip_transfer_node_node_comp(struct avl_node* node1,
+                                        struct avl_node* node2)
+{
+    struct chip_data* r1 = avl_entry(node1, struct chip_data, avl);
+    struct chip_data* r2 = avl_entry(node2, struct chip_data, avl);
+
+    if (r1->xfer_complete_time < r2->xfer_complete_time)
+        return -1;
+    else if (r1->xfer_complete_time > r2->xfer_complete_time)
+        return 1;
+    return 0;
+}
+
+static int die_command_key_node_comp(void* key, struct avl_node* node)
+{
+    struct die_data* r1 = (struct die_data*)key;
+    struct die_data* r2 = avl_entry(node, struct die_data, avl);
+
+    if (r1->cmd_finish_time < r2->cmd_finish_time)
+        return -1;
+    else if (r1->cmd_finish_time > r2->cmd_finish_time)
+        return 1;
+    return 0;
+}
+
+static int die_command_node_node_comp(struct avl_node* node1,
+                                      struct avl_node* node2)
+{
+    struct die_data* r1 = avl_entry(node1, struct die_data, avl);
+    struct die_data* r2 = avl_entry(node2, struct die_data, avl);
+
+    if (r1->cmd_finish_time < r2->cmd_finish_time)
+        return -1;
+    else if (r1->cmd_finish_time > r2->cmd_finish_time)
+        return 1;
+    return 0;
+}
+
+static int die_transfer_key_node_comp(void* key, struct avl_node* node)
+{
+    struct die_data* r1 = (struct die_data*)key;
+    struct die_data* r2 = avl_entry(node, struct die_data, avl);
+
+    if (r1->xfer_complete_time < r2->xfer_complete_time)
+        return -1;
+    else if (r1->xfer_complete_time > r2->xfer_complete_time)
+        return 1;
+    return 0;
+}
+
+static int die_transfer_node_node_comp(struct avl_node* node1,
+                                       struct avl_node* node2)
+{
+    struct die_data* r1 = avl_entry(node1, struct die_data, avl);
+    struct die_data* r2 = avl_entry(node2, struct die_data, avl);
+
+    if (r1->xfer_complete_time < r2->xfer_complete_time)
+        return -1;
+    else if (r1->xfer_complete_time > r2->xfer_complete_time)
+        return 1;
+    return 0;
+}
+
+static struct avl_node* get_min_node(struct avl_root* root)
+{
+    struct avl_node* node = root->node;
+
+    while (node) {
+        if (!node->left) break;
+        node = node->left;
+    }
+
+    return node;
 }
 
 static inline void get_metadata(struct flash_address* addr,
@@ -131,9 +230,9 @@ static inline void set_metadata(struct flash_address* addr,
         .metadata = *metadata;
 }
 
-static inline get_command_latency(struct chip_data* chip,
-                                  enum flash_command_code cmd_code,
-                                  unsigned int page_id)
+static inline time_ns_t get_command_latency(struct chip_data* chip,
+                                            enum flash_command_code cmd_code,
+                                            unsigned int page_id)
 {
     int latency_type = 0;
 
@@ -220,8 +319,10 @@ static void init_chip(struct chip_data* chip)
     chip->last_xfer_start = INVALID_TIME;
     chip->exec_start_time = INVALID_TIME;
 
-    for (i = 0; i < dies_per_chip; i++)
+    for (i = 0; i < dies_per_chip; i++) {
+        chip->dies[i].chip = chip;
         init_die(&chip->dies[i]);
+    }
 }
 
 static void alloc_controller(void)
@@ -341,35 +442,27 @@ int nvm_ctlr_is_die_busy(unsigned int channel, unsigned int chip,
 
 static void rearm_timer(void)
 {
-    int i, j, k;
     time_ns_t min_time = UINT64_MAX;
+    struct avl_node* node;
 
-    for (i = 0; i < channel_count; i++) {
-        for (j = 0; j < chips_per_channel; j++) {
-            struct chip_data* chip = &chip_data[i][j];
+    node = get_min_node(&chip_transfer_avl);
+    if (node) {
+        struct chip_data* chip = avl_entry(node, struct chip_data, avl);
+        if (min_time > chip->xfer_complete_time)
+            min_time = chip->xfer_complete_time;
+    }
 
-            if (chip->current_xfer) {
-                if (min_time > chip->xfer_complete_time) {
-                    min_time = chip->xfer_complete_time;
-                }
-            }
+    node = get_min_node(&die_command_avl);
+    if (node) {
+        struct die_data* die = avl_entry(node, struct die_data, avl);
+        if (min_time > die->cmd_finish_time) min_time = die->cmd_finish_time;
+    }
 
-            for (k = 0; k < dies_per_chip; k++) {
-                struct die_data* die = &chip->dies[k];
-
-                if (die->current_cmd) {
-                    if (min_time > die->cmd_finish_time) {
-                        min_time = die->cmd_finish_time;
-                    }
-                }
-
-                if (die->active_xfer) {
-                    if (min_time > die->xfer_complete_time) {
-                        min_time = die->xfer_complete_time;
-                    }
-                }
-            }
-        }
+    node = get_min_node(&die_transfer_avl);
+    if (node) {
+        struct die_data* die = avl_entry(node, struct die_data, avl);
+        if (min_time > die->xfer_complete_time)
+            min_time = die->xfer_complete_time;
     }
 
     if (min_time != UINT64_MAX) {
@@ -396,7 +489,10 @@ static int start_cmd_data_transfer(struct chip_data* chip)
     chip->last_xfer_start = now;
     chip->xfer_complete_time = now + die->data_transfer_time;
 
-    if (!die->data_transfer_time) complete_chip_transfer(chip);
+    if (!die->data_transfer_time)
+        complete_chip_transfer(chip);
+    else
+        avl_insert(&chip->avl, &chip_transfer_avl);
 
     return TRUE;
 }
@@ -428,6 +524,7 @@ static int start_data_out_transfer(struct channel_data* channel)
     chip->last_xfer_start = now;
     die->xfer_complete_time =
         now + nvddr2_data_out_transfer_time(channel, txn->length);
+    avl_insert(&die->avl, &die_transfer_avl);
     set_channel_status(channel, BUS_BUSY);
 
     return TRUE;
@@ -448,6 +545,7 @@ static int start_die_command(struct chip_data* chip, struct flash_command* cmd)
     die->cmd_finish_time =
         now + get_command_latency(chip, cmd->cmd_code, cmd->addrs[0].page_id);
     die->current_cmd = cmd;
+    avl_insert(&die->avl, &die_command_avl);
 
     if (!chip->active_dies) chip->exec_start_time = now;
     chip->active_dies++;
@@ -738,31 +836,91 @@ static void complete_data_out_transfer(struct chip_data* chip,
     tsu_notify_channel_idle(chip->channel->channel_id);
 }
 
+static void chip_transfer_get_completion(struct avl_root* root, time_ns_t now,
+                                         struct list_head* list)
+{
+    struct chip_data key;
+    struct avl_iter iter;
+    struct avl_node* node;
+
+    INIT_LIST_HEAD(list);
+    key.xfer_complete_time = 0;
+    avl_start_iter(root, &iter, &key, AVL_GREATER);
+
+    for (; (node = avl_get_iter(&iter)); avl_inc_iter(&iter)) {
+        struct chip_data* chip = avl_entry(node, struct chip_data, avl);
+
+        if (chip->xfer_complete_time > now) return;
+        list_add_tail(&chip->completion, list);
+    }
+}
+
+static void die_command_get_completion(struct avl_root* root, time_ns_t now,
+                                       struct list_head* list)
+{
+    struct die_data key;
+    struct avl_iter iter;
+    struct avl_node* node;
+
+    INIT_LIST_HEAD(list);
+    key.cmd_finish_time = 0;
+    avl_start_iter(root, &iter, &key, AVL_GREATER);
+
+    for (; (node = avl_get_iter(&iter)); avl_inc_iter(&iter)) {
+        struct die_data* die = avl_entry(node, struct die_data, avl);
+
+        if (die->cmd_finish_time > now) return;
+        list_add_tail(&die->completion, list);
+    }
+}
+
+static void die_transfer_get_completion(struct avl_root* root, time_ns_t now,
+                                        struct list_head* list)
+{
+    struct die_data key;
+    struct avl_iter iter;
+    struct avl_node* node;
+
+    INIT_LIST_HEAD(list);
+    key.xfer_complete_time = 0;
+    avl_start_iter(root, &iter, &key, AVL_GREATER);
+
+    for (; (node = avl_get_iter(&iter)); avl_inc_iter(&iter)) {
+        struct die_data* die = avl_entry(node, struct die_data, avl);
+
+        if (die->xfer_complete_time > now) return;
+        list_add_tail(&die->completion, list);
+    }
+}
+
 static void check_completion(void)
 {
-    int i, j, k;
+    int i;
 
     time_ns_t now = current_time_ns();
+    struct list_head list;
+    struct chip_data* chip;
+    struct die_data* die;
 
-    for (i = 0; i < channel_count; i++) {
-        for (j = 0; j < chips_per_channel; j++) {
-            struct chip_data* chip = &chip_data[i][j];
+    chip_transfer_get_completion(&chip_transfer_avl, now, &list);
+    list_for_each_entry(chip, &list, completion)
+    {
+        avl_erase(&chip->avl, &chip_transfer_avl);
+        complete_chip_transfer(chip);
+    }
 
-            if (chip->current_xfer && now >= chip->xfer_complete_time)
-                complete_chip_transfer(chip);
+    die_command_get_completion(&die_command_avl, now, &list);
+    list_for_each_entry(die, &list, completion)
+    {
+        avl_erase(&die->avl, &die_command_avl);
+        complete_die_command(die->chip, die);
+    }
 
-            for (k = 0; k < dies_per_chip; k++) {
-                struct die_data* die = &chip->dies[k];
-
-                if (die->current_cmd && now >= die->cmd_finish_time) {
-                    complete_die_command(chip, die);
-                }
-
-                if (die->active_xfer && now >= die->xfer_complete_time) {
-                    complete_data_out_transfer(chip, die);
-                }
-            }
-        }
+    die_transfer_get_completion(&die_transfer_avl, now, &list);
+    list_for_each_entry(die, &list, completion)
+    {
+        avl_erase(&die->avl, &die_transfer_avl);
+        complete_data_out_transfer(die->chip, die);
     }
 
     for (i = 0; i < channel_count; i++) {
@@ -810,6 +968,13 @@ void nvm_ctlr_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
     pages_per_block = nr_pages_per_block;
 
     alloc_controller();
+
+    INIT_AVL_ROOT(&chip_transfer_avl, chip_transfer_key_node_comp,
+                  chip_transfer_node_node_comp);
+    INIT_AVL_ROOT(&die_command_avl, die_command_key_node_comp,
+                  die_command_node_node_comp);
+    INIT_AVL_ROOT(&die_transfer_avl, die_transfer_key_node_comp,
+                  die_transfer_node_node_comp);
 }
 
 void nvm_ctlr_timer_interrupt(void)
