@@ -666,7 +666,7 @@ void nvm_ctlr_dispatch(struct list_head* txn_list)
         break;
     }
 
-    rearm_timer();
+    /* rearm_timer(); */
 }
 
 static void complete_chip_transfer(struct chip_data* chip)
@@ -980,8 +980,10 @@ void nvm_ctlr_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
 void nvm_ctlr_timer_interrupt(void)
 {
     check_completion();
-    rearm_timer();
+    /* rearm_timer(); */
 }
+
+void nvm_ctlr_tick(void) { check_completion(); }
 
 void nvm_ctlr_report_result(Mcmq__SimResult* result)
 {

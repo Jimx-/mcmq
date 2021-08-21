@@ -137,55 +137,66 @@ void process_worker_queue(void)
     struct event event;
     unsigned int self = smp_processor_id();
 
+    assert(self != THREAD_TSU);
+
     while (dequeue_event(&event)) {
-        if (self == THREAD_TSU) {
+        switch (event.type) {
+        case EVENT_USER_REQUEST:
+            process_user_request(event.request);
+            break;
+        case EVENT_TRANSACTION_COMPLETE:
+            /* printk( */
+            /*     "Flash %s transaction complete source=%s, lpa=%d, " */
+            /*     "channel=%d, chip=%d, die=%d, plane=%d, block=%d, " */
+            /*     "page=%d\r\n", */
+            /*     event.txn->type == TXN_READ */
+            /*         ? "read" */
+            /*         : (event.txn->type == TXN_WRITE ? "write" : "erase"),
+             */
+            /*     event.txn->source == TS_USER_IO */
+            /*         ? "user" */
+            /*         : (event.txn->source == TS_MAPPING ? "mapping" :
+             * "gc"), */
+            /*     event.txn->lpa, event.txn->addr.channel_id, */
+            /*     event.txn->addr.chip_id, event.txn->addr.die_id, */
+            /*     event.txn->addr.plane_id, event.txn->addr.block_id, */
+            /*     event.txn->addr.page_id); */
+
+            switch (event.txn->source) {
+            case TS_USER_IO:
+                dc_transaction_complete(event.txn);
+                break;
+            case TS_MAPPING:
+                amu_transaction_complete(event.txn);
+                break;
+            }
+
+            bm_transaction_complete(event.txn);
+            tsu_transaction_complete(event.txn);
+
+            SLABFREE(event.txn);
+            break;
+        }
+    }
+}
+
+static void tsu_worker_thread(void)
+{
+    struct event event;
+
+    while (1) {
+        while (dequeue_event(&event)) {
             switch (event.type) {
             case EVENT_FLASH_TRANSACTION:
                 tsu_process_transaction(event.txn);
                 break;
             }
-        } else {
-            switch (event.type) {
-            case EVENT_USER_REQUEST:
-                process_user_request(event.request);
-                break;
-            case EVENT_TRANSACTION_COMPLETE:
-                /* printk( */
-                /*     "Flash %s transaction complete source=%s, lpa=%d, " */
-                /*     "channel=%d, chip=%d, die=%d, plane=%d, block=%d, " */
-                /*     "page=%d\r\n", */
-                /*     event.txn->type == TXN_READ */
-                /*         ? "read" */
-                /*         : (event.txn->type == TXN_WRITE ? "write" : "erase"),
-                 */
-                /*     event.txn->source == TS_USER_IO */
-                /*         ? "user" */
-                /*         : (event.txn->source == TS_MAPPING ? "mapping" :
-                 * "gc"), */
-                /*     event.txn->lpa, event.txn->addr.channel_id, */
-                /*     event.txn->addr.chip_id, event.txn->addr.die_id, */
-                /*     event.txn->addr.plane_id, event.txn->addr.block_id, */
-                /*     event.txn->addr.page_id); */
-
-                switch (event.txn->source) {
-                case TS_USER_IO:
-                    dc_transaction_complete(event.txn);
-                    break;
-                case TS_MAPPING:
-                    amu_transaction_complete(event.txn);
-                    break;
-                }
-
-                bm_transaction_complete(event.txn);
-                tsu_transaction_complete(event.txn);
-
-                SLABFREE(event.txn);
-                break;
-            }
         }
-    }
 
-    if (self == THREAD_TSU) tsu_flush_queues();
+        tsu_flush_queues();
+
+        nvm_ctlr_tick();
+    }
 }
 
 void ssd_worker_thread(void)
@@ -194,6 +205,9 @@ void ssd_worker_thread(void)
 
     if (self == THREAD_VSOCK_TX) {
         virtio_vsock_tx_thread();
+    } else if (self == THREAD_TSU) {
+        csr_clear(sie, SIE_SSIE);
+        tsu_worker_thread();
     } else {
         while (1)
             wait_for_interrupt();

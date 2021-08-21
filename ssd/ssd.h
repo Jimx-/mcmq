@@ -190,6 +190,7 @@ int nvm_ctlr_is_die_busy(unsigned int channel, unsigned int chip,
 void nvm_ctlr_timer_interrupt(void);
 void nvm_ctlr_get_metadata(struct flash_address* addr,
                            struct page_metadata* metadata);
+void nvm_ctlr_tick(void);
 void nvm_ctlr_report_result(Mcmq__SimResult* result);
 
 #endif

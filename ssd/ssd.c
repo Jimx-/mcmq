@@ -318,6 +318,8 @@ static void ssd_config_recv_callback(uint32_t src_cid, uint32_t src_port,
     ssd_init_config(&config);
 
     hostif_send_ready();
+
+    smp_commence();
 }
 
 void ssd_init(void)

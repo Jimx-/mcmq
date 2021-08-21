@@ -50,7 +50,7 @@ void kernel_main(unsigned int hart_id, void* dtb_phys)
 
     /* printk("%d\n", sizeof(struct reg_context)); */
 
-    smp_commence();
+    /* smp_commence(); */
 
     while (1)
         wait_for_interrupt();
