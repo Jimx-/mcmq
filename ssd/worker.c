@@ -145,22 +145,21 @@ void process_worker_queue(void)
             process_user_request(event.request);
             break;
         case EVENT_TRANSACTION_COMPLETE:
-            /* printk( */
-            /*     "Flash %s transaction complete source=%s, lpa=%d, " */
-            /*     "channel=%d, chip=%d, die=%d, plane=%d, block=%d, " */
-            /*     "page=%d\r\n", */
-            /*     event.txn->type == TXN_READ */
-            /*         ? "read" */
-            /*         : (event.txn->type == TXN_WRITE ? "write" : "erase"),
+            /* printk("Flash %s transaction complete source=%s, lpa=%d, " */
+            /*        "channel=%d, chip=%d, die=%d, plane=%d, block=%d, " */
+            /*        "page=%d\r\n", */
+            /*        event.txn->type == TXN_READ */
+            /*            ? "read" */
+            /*            : (event.txn->type == TXN_WRITE ? "write" : "erase"),
              */
-            /*     event.txn->source == TS_USER_IO */
-            /*         ? "user" */
-            /*         : (event.txn->source == TS_MAPPING ? "mapping" :
+            /*        event.txn->source == TS_USER_IO */
+            /*            ? "user" */
+            /*            : (event.txn->source == TS_MAPPING ? "mapping" :
              * "gc"), */
-            /*     event.txn->lpa, event.txn->addr.channel_id, */
-            /*     event.txn->addr.chip_id, event.txn->addr.die_id, */
-            /*     event.txn->addr.plane_id, event.txn->addr.block_id, */
-            /*     event.txn->addr.page_id); */
+            /*        event.txn->lpa, event.txn->addr.channel_id, */
+            /*        event.txn->addr.chip_id, event.txn->addr.die_id, */
+            /*        event.txn->addr.plane_id, event.txn->addr.block_id, */
+            /*        event.txn->addr.page_id); */
 
             switch (event.txn->source) {
             case TS_USER_IO:

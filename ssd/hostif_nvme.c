@@ -182,6 +182,9 @@ static void process_admin_command(struct nvme_command* cmd)
     case nvme_admin_create_sq:
         status = process_create_sq_command(&cmd->create_sq, &result);
         break;
+    case nvme_admin_dbbuf:
+        status = 0;
+        break;
     default:
         status = NVME_SC_INVALID_OPCODE;
         break;

@@ -179,6 +179,7 @@ void nvm_ctlr_init(unsigned int nr_channels, unsigned int nr_chips_per_channel,
 void nvm_ctlr_init_channel(unsigned int channel_id, unsigned int channel_width,
                            time_ns_t t_RC, time_ns_t t_DSC);
 void nvm_ctlr_init_chip(unsigned int channel_id, unsigned int chip_id,
+                        enum flash_technology technology,
                         time_ns_t* read_latencies, time_ns_t* program_latencies,
                         time_ns_t erase_latency);
 void nvm_ctlr_dispatch(struct list_head* txn_list);

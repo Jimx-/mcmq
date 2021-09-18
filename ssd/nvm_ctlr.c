@@ -49,6 +49,7 @@ struct die_data {
     struct list_head completion;
     struct avl_node avl;
     time_ns_t data_transfer_time;
+    int die_num;
 
     struct chip_data* chip;
     struct plane_data* planes;
@@ -68,6 +69,7 @@ struct chip_data {
     struct avl_node avl;
     struct list_head completion;
     unsigned int chip_id;
+    unsigned int chip_num;
     struct channel_data* channel;
     enum flash_technology technology;
     time_ns_t read_latencies[3];
@@ -124,6 +126,12 @@ static int chip_transfer_key_node_comp(void* key, struct avl_node* node)
         return -1;
     else if (r1->xfer_complete_time > r2->xfer_complete_time)
         return 1;
+
+    if (r1->chip_num < r2->chip_num)
+        return -1;
+    else if (r1->chip_num > r2->chip_num)
+        return 1;
+
     return 0;
 }
 
@@ -137,6 +145,12 @@ static int chip_transfer_node_node_comp(struct avl_node* node1,
         return -1;
     else if (r1->xfer_complete_time > r2->xfer_complete_time)
         return 1;
+
+    if (r1->chip_num < r2->chip_num)
+        return -1;
+    else if (r1->chip_num > r2->chip_num)
+        return 1;
+
     return 0;
 }
 
@@ -149,6 +163,12 @@ static int die_command_key_node_comp(void* key, struct avl_node* node)
         return -1;
     else if (r1->cmd_finish_time > r2->cmd_finish_time)
         return 1;
+
+    if (r1->die_num < r2->die_num)
+        return -1;
+    else if (r1->die_num > r2->die_num)
+        return 1;
+
     return 0;
 }
 
@@ -162,6 +182,12 @@ static int die_command_node_node_comp(struct avl_node* node1,
         return -1;
     else if (r1->cmd_finish_time > r2->cmd_finish_time)
         return 1;
+
+    if (r1->die_num < r2->die_num)
+        return -1;
+    else if (r1->die_num > r2->die_num)
+        return 1;
+
     return 0;
 }
 
@@ -174,6 +200,12 @@ static int die_transfer_key_node_comp(void* key, struct avl_node* node)
         return -1;
     else if (r1->xfer_complete_time > r2->xfer_complete_time)
         return 1;
+
+    if (r1->die_num < r2->die_num)
+        return -1;
+    else if (r1->die_num > r2->die_num)
+        return 1;
+
     return 0;
 }
 
@@ -187,6 +219,12 @@ static int die_transfer_node_node_comp(struct avl_node* node1,
         return -1;
     else if (r1->xfer_complete_time > r2->xfer_complete_time)
         return 1;
+
+    if (r1->die_num < r2->die_num)
+        return -1;
+    else if (r1->die_num > r2->die_num)
+        return 1;
+
     return 0;
 }
 
@@ -205,8 +243,8 @@ static struct avl_node* get_min_node(struct avl_root* root)
 static inline void get_metadata(struct flash_address* addr,
                                 struct page_metadata* metadata)
 {
-    *metadata = chip_data[addr->chip_id]
-                    ->dies[addr->die_id]
+    *metadata = chip_data[addr->channel_id][addr->chip_id]
+                    .dies[addr->die_id]
                     .planes[addr->plane_id]
                     .blocks[addr->block_id]
                     .pages[addr->page_id]
@@ -222,8 +260,8 @@ void nvm_ctlr_get_metadata(struct flash_address* addr,
 static inline void set_metadata(struct flash_address* addr,
                                 struct page_metadata* metadata)
 {
-    chip_data[addr->chip_id]
-        ->dies[addr->die_id]
+    chip_data[addr->channel_id][addr->chip_id]
+        .dies[addr->die_id]
         .planes[addr->plane_id]
         .blocks[addr->block_id]
         .pages[addr->page_id]
@@ -238,7 +276,7 @@ static inline time_ns_t get_command_latency(struct chip_data* chip,
 
     switch (chip->technology) {
     case FT_MLC:
-        latency_type = page_id & 1;
+        latency_type = (page_id & 1) * 2;
         break;
     case FT_TLC:
         latency_type = (page_id <= 5)
@@ -337,6 +375,7 @@ static void alloc_controller(void)
     struct plane_data* cur_plane;
     struct block_data* cur_block;
     struct page* cur_page;
+    int chip_num = 0, die_num = 0;
     int i, j, k, l, m;
 
     nr_chips = channel_count * chips_per_channel;
@@ -392,6 +431,7 @@ static void alloc_controller(void)
             struct chip_data* chip = &chip_data[i][j];
             memset(chip, 0, sizeof(*chip));
             chip->chip_id = j;
+            chip->chip_num = chip_num++;
             chip->channel = channel;
             chip->dies = cur_die;
             cur_die += dies_per_chip;
@@ -399,6 +439,7 @@ static void alloc_controller(void)
             for (k = 0; k < dies_per_chip; k++) {
                 struct die_data* die = &chip->dies[k];
                 memset(die, 0, sizeof(*die));
+                die->die_num = die_num++;
                 die->planes = cur_plane;
                 cur_plane += planes_per_die;
 
@@ -943,11 +984,13 @@ void nvm_ctlr_init_channel(unsigned int channel_id, unsigned int channel_width,
 }
 
 void nvm_ctlr_init_chip(unsigned int channel_id, unsigned int chip_id,
+                        enum flash_technology technology,
                         time_ns_t* read_latencies, time_ns_t* program_latencies,
                         time_ns_t erase_latency)
 {
     struct chip_data* chip = &chip_data[channel_id][chip_id];
 
+    chip->technology = technology;
     memcpy(chip->read_latencies, read_latencies, sizeof(chip->read_latencies));
     memcpy(chip->program_latencies, program_latencies,
            sizeof(chip->program_latencies));

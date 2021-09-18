@@ -64,7 +64,9 @@ static int fdt_scan_plic(void* blob, unsigned long offset, const char* name,
     const char* type = fdt_getprop(blob, offset, "compatible", NULL);
     int cpu;
 
-    if (!type || strcmp(type, "riscv,plic0") != 0) return 0;
+    if (!type || (strcmp(type, "sifive,plic-1.0.0") != 0 &&
+                  strcmp(type, "riscv,plic0") != 0))
+        return 0;
 
     struct plic* plic;
     SLABALLOC(plic);

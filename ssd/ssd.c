@@ -172,10 +172,13 @@ static void init_config_from_pb(struct ssd_config* config,
     switch (flash_config_pb->technology) {
     case MCMQ__FLASH_TECHNOLOGY__FT_SLC:
         flash_config->technology = FT_SLC;
+        break;
     case MCMQ__FLASH_TECHNOLOGY__FT_MLC:
         flash_config->technology = FT_MLC;
+        break;
     case MCMQ__FLASH_TECHNOLOGY__FT_TLC:
         flash_config->technology = FT_TLC;
+        break;
     default:
         break;
     }
@@ -266,7 +269,8 @@ static void ssd_init_config(struct ssd_config* config)
             (time_ns_t)(1000 / config->channel_transfer_rate * 2));
 
         for (j = 0; j < config->nr_chips_per_channel; j++) {
-            nvm_ctlr_init_chip(i, j, read_latencies, write_latencies,
+            nvm_ctlr_init_chip(i, j, config->flash_config.technology,
+                               read_latencies, write_latencies,
                                config->flash_config.block_erase_latency);
         }
     }
