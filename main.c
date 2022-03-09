@@ -52,8 +52,7 @@ void kernel_main(unsigned int hart_id, void* dtb_phys)
 
     /* smp_commence(); */
 
-    while (1)
-        wait_for_interrupt();
+    hostif_thread();
 
     /* unreachable */
     return;

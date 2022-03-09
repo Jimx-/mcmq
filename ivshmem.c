@@ -33,7 +33,10 @@ int init_ivshmem(void)
 
 void ivshmem_copy_from(void* dst, shmem_addr_t src, size_t len)
 {
-    memcpy(dst, shmem_base + src, len);
+    if (len == 4)
+        *(uint32_t*)dst = *(uint32_t*)(shmem_base + src);
+    else
+        memcpy(dst, shmem_base + src, len);
 }
 
 void ivshmem_copy_to(shmem_addr_t dst, void* src, size_t len)

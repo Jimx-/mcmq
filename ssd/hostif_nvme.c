@@ -25,6 +25,8 @@ static uint8_t cc_iosqes;
 static uint8_t cc_iocqes;
 static uint8_t cc_mps;
 
+static uint64_t dbbuf_dbs;
+
 #define INVALID_QID ((uint16_t)-1)
 
 struct nvme_queue {
@@ -34,6 +36,8 @@ struct nvme_queue {
     uint16_t cq_depth;
     uint64_t sq_dma_addr;
     uint64_t cq_dma_addr;
+    uint64_t sq_db_addr;
+    uint64_t cq_db_addr;
 
     uint16_t sq_head;
     uint16_t sq_tail;
@@ -78,6 +82,14 @@ static void init_nvme_queue(struct nvme_queue* nvmeq, unsigned int qid)
     nvmeq->cq_head = 0;
     nvmeq->cq_tail = 0;
     nvmeq->cq_phase = 1;
+
+    nvmeq->sq_db_addr = 0;
+    nvmeq->cq_db_addr = 0;
+
+    if (qid && dbbuf_dbs) {
+        nvmeq->sq_db_addr = dbbuf_dbs + 2 * qid * (4 << CAP_DSTRD);
+        nvmeq->cq_db_addr = dbbuf_dbs + (2 * qid + 1) * (4 << CAP_DSTRD);
+    }
 }
 
 static int post_cqe(struct nvme_queue* nvmeq, int status, uint16_t command_id,
@@ -92,8 +104,9 @@ static int post_cqe(struct nvme_queue* nvmeq, int status, uint16_t command_id,
     cqe.sq_head = nvmeq->sq_head;
     if (result) cqe.result = *result;
 
-    ivshmem_copy_to(nvmeq->cq_dma_addr + (nvmeq->cq_tail << cc_iocqes), &cqe,
-                    sizeof(cqe));
+    ivshmem_copy_to(nvmeq->cq_dma_addr +
+                        ((uint64_t)nvmeq->cq_tail << cc_iocqes),
+                    &cqe, sizeof(cqe));
 
     if (++nvmeq->cq_tail == nvmeq->cq_depth) {
         nvmeq->cq_tail = 0;
@@ -167,6 +180,28 @@ static int process_create_sq_command(struct nvme_create_sq* cmd,
     return 0;
 }
 
+static int process_dbbuf_config_command(struct nvme_command* cmd,
+                                        union nvme_result* result)
+{
+    int stride = 4 << CAP_DSTRD;
+    uint64_t dbs_addr = cmd->common.dptr.prp1;
+    int i;
+
+    if (dbs_addr == 0 || dbs_addr & (PG_SIZE - 1)) {
+        return NVME_SC_INVALID_FIELD;
+    }
+
+    dbbuf_dbs = dbs_addr;
+
+    for (i = 1; i <= io_queue_count; i++) {
+        struct nvme_queue* nvmeq = &nvme_queues[i];
+        nvmeq->sq_db_addr = dbs_addr + 2 * i * stride;
+        nvmeq->cq_db_addr = dbs_addr + (2 * i + 1) * stride;
+    }
+
+    return 0;
+}
+
 static void process_admin_command(struct nvme_command* cmd)
 {
     int status;
@@ -183,6 +218,7 @@ static void process_admin_command(struct nvme_command* cmd)
         status = process_create_sq_command(&cmd->create_sq, &result);
         break;
     case nvme_admin_dbbuf:
+        status = process_dbbuf_config_command(cmd, &result);
         status = 0;
         break;
     default:
@@ -264,8 +300,9 @@ static void fetch_next_request(struct nvme_queue* nvmeq)
 {
     struct nvme_command cmd;
 
-    ivshmem_copy_from(&cmd, nvmeq->sq_dma_addr + (nvmeq->sq_head << cc_iosqes),
-                      sizeof(cmd));
+    ivshmem_copy_from(
+        &cmd, nvmeq->sq_dma_addr + ((uint64_t)nvmeq->sq_head << cc_iosqes),
+        sizeof(cmd));
 
     if (nvmeq->qid == 0)
         process_admin_command(&cmd);
@@ -341,6 +378,33 @@ static void update_sq_tail_doorbell(unsigned int qid, uint32_t val)
         hostif_send_irq(nvmeq->cq_vector);
 
     if (qid) notify_worker(nvmeq_worker(qid));
+}
+
+void poll_sq_dbbuf(void)
+{
+    int i;
+
+    for (i = 1; i <= io_queue_count; i++) {
+        struct nvme_queue* nvmeq = &nvme_queues[i];
+        uint32_t sq_tail;
+
+        if (!nvmeq->sq_db_addr) continue;
+        ivshmem_copy_from(&sq_tail, nvmeq->sq_db_addr, sizeof(sq_tail));
+
+        asm volatile("fence iorw, iorw" : : : "memory");
+
+        if (sq_tail != nvmeq->sq_tail) update_sq_tail_doorbell(i, sq_tail);
+    }
+}
+
+void nvme_hostif_thread(void)
+{
+    while (1) {
+        if (dbbuf_dbs)
+            poll_sq_dbbuf();
+        else
+            wait_for_interrupt();
+    }
 }
 
 void nvme_process_write_message(uint64_t addr, const char* buf, size_t len)

@@ -195,6 +195,8 @@ void hostif_init(unsigned int sectors_per_page)
 
 void hostif_init_cpu(void) { init_ssd_worker(); }
 
+void hostif_thread(void) { nvme_hostif_thread(); }
+
 void hostif_report_result(Mcmq__SimResult* result)
 {
     nvme_report_result(result);
